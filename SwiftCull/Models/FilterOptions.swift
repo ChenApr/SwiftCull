@@ -33,8 +33,8 @@ enum FileTypeFilter: String, CaseIterable, Identifiable, Sendable {
     var displayName: String {
         switch self {
         case .all: return "全部"
-        case .jpgOnly: return "含 JPG"
-        case .nefOnly: return "含 RAW"
+        case .jpgOnly: return "仅 JPG"
+        case .nefOnly: return "仅 RAW"
         case .jpgAndNef: return "RAW + JPG"
         case .movOnly: return "仅 MOV"
         case .hasMov: return "含 MOV"

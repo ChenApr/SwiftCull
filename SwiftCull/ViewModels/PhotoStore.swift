@@ -860,7 +860,7 @@ class PhotoStore: ObservableObject {
         }
     }
 
-    func exportFilteredPhotos(separateTypes: Bool = false) {
+    func exportFilteredPhotos() {
         guard !filteredPhotos.isEmpty else {
             exportMessage = "没有可导出的照片"
             return
@@ -885,6 +885,7 @@ class PhotoStore: ObservableObject {
 
         let destinationDir = (selectedURL.path as NSString).appendingPathComponent(defaultFileName)
         let photosToExport = filteredPhotos
+        let fileTypeFilter = filterOptions.fileTypeFilter
         let total = photosToExport.count
         isExporting = true
         exportProgress = 0
@@ -900,11 +901,26 @@ class PhotoStore: ObservableObject {
             }
 
             for (index, photo) in photosToExport.enumerated() {
-                let files: [(path: String, subdirectory: String?)] = [
-                    photo.jpgPath.map { ($0, separateTypes ? "JPG" : nil) },
-                    photo.nefPath.map { ($0, separateTypes ? "RAW" : nil) },
-                    photo.movPath.map { ($0, nil) }
-                ].compactMap { $0 }
+                let files: [(path: String, subdirectory: String?)]
+                switch fileTypeFilter {
+                case .jpgOnly:
+                    files = photo.jpgPath.map { [($0, nil)] } ?? []
+                case .nefOnly:
+                    files = photo.nefPath.map { [($0, nil)] } ?? []
+                case .jpgAndNef:
+                    files = [
+                        photo.jpgPath.map { ($0, "JPG") },
+                        photo.nefPath.map { ($0, "RAW") }
+                    ].compactMap { $0 }
+                case .movOnly:
+                    files = photo.movPath.map { [($0, nil)] } ?? []
+                case .all, .hasMov:
+                    files = [
+                        photo.jpgPath.map { ($0, nil) },
+                        photo.nefPath.map { ($0, nil) },
+                        photo.movPath.map { ($0, nil) }
+                    ].compactMap { $0 }
+                }
                 for (sourcePath, subdirectory) in files {
                     let fileName = (sourcePath as NSString).lastPathComponent
                     let fileDestination = subdirectory.map {
