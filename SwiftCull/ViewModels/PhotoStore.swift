@@ -90,7 +90,20 @@ class PhotoStore: ObservableObject {
     var totalPhotoCount: Int { photos.count }
 
     var totalSize: String {
-        let total = filteredPhotos.reduce(Int64(0)) { $0 + $1.totalFileSize }
+        let total = filteredPhotos.reduce(Int64(0)) { total, photo in
+            switch filterOptions.fileTypeFilter {
+            case .jpgOnly:
+                return total + (photo.jpgFileSize ?? 0)
+            case .nefOnly:
+                return total + (photo.nefFileSize ?? 0)
+            case .jpgAndNef:
+                return total + (photo.jpgFileSize ?? 0) + (photo.nefFileSize ?? 0)
+            case .movOnly:
+                return total + (photo.movFileSize ?? 0)
+            case .all, .hasMov:
+                return total + photo.totalFileSize
+            }
+        }
         return ByteCountFormatter.string(fromByteCount: total, countStyle: .file)
     }
 
@@ -335,8 +348,8 @@ class PhotoStore: ObservableObject {
 
             switch fileTypeFilter {
             case .all: break
-            case .jpgOnly: if !(photo.hasJpg && !photo.hasNef && !photo.hasMov) { continue }
-            case .nefOnly: if !(photo.hasNef && !photo.hasJpg && !photo.hasMov) { continue }
+            case .jpgOnly: if !photo.hasJpg { continue }
+            case .nefOnly: if !photo.hasNef { continue }
             case .jpgAndNef: if !(photo.hasJpg && photo.hasNef) { continue }
             case .movOnly: if !photo.isVideoOnly { continue }
             case .hasMov: if !photo.hasMov { continue }
@@ -885,6 +898,7 @@ class PhotoStore: ObservableObject {
 
         let destinationDir = (selectedURL.path as NSString).appendingPathComponent(defaultFileName)
         let photosToExport = filteredPhotos
+        let fileTypeFilter = filterOptions.fileTypeFilter
         let total = photosToExport.count
         isExporting = true
         exportProgress = 0
@@ -900,10 +914,35 @@ class PhotoStore: ObservableObject {
             }
 
             for (index, photo) in photosToExport.enumerated() {
-                let paths: [String] = [photo.jpgPath, photo.nefPath, photo.movPath].compactMap { $0 }
-                for sourcePath in paths {
+                let files: [(path: String, subdirectory: String?)]
+                switch fileTypeFilter {
+                case .jpgOnly:
+                    files = photo.jpgPath.map { [($0, nil)] } ?? []
+                case .nefOnly:
+                    files = photo.nefPath.map { [($0, nil)] } ?? []
+                case .jpgAndNef:
+                    files = [
+                        photo.jpgPath.map { ($0, "JPG") },
+                        photo.nefPath.map { ($0, "RAW") }
+                    ].compactMap { $0 }
+                case .movOnly:
+                    files = photo.movPath.map { [($0, nil)] } ?? []
+                case .all, .hasMov:
+                    files = [
+                        photo.jpgPath.map { ($0, nil) },
+                        photo.nefPath.map { ($0, nil) },
+                        photo.movPath.map { ($0, nil) }
+                    ].compactMap { $0 }
+                }
+                for (sourcePath, subdirectory) in files {
                     let fileName = (sourcePath as NSString).lastPathComponent
-                    let destPath = (destinationDir as NSString).appendingPathComponent(fileName)
+                    let fileDestination = subdirectory.map {
+                        (destinationDir as NSString).appendingPathComponent($0)
+                    } ?? destinationDir
+                    if !fm.fileExists(atPath: fileDestination) {
+                        try? fm.createDirectory(atPath: fileDestination, withIntermediateDirectories: true)
+                    }
+                    let destPath = (fileDestination as NSString).appendingPathComponent(fileName)
                     do {
                         try fm.copyItem(atPath: sourcePath, toPath: destPath)
                         exported += 1
