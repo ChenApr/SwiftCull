@@ -90,7 +90,20 @@ class PhotoStore: ObservableObject {
     var totalPhotoCount: Int { photos.count }
 
     var totalSize: String {
-        let total = filteredPhotos.reduce(Int64(0)) { $0 + $1.totalFileSize }
+        let total = filteredPhotos.reduce(Int64(0)) { total, photo in
+            switch filterOptions.fileTypeFilter {
+            case .jpgOnly:
+                return total + (photo.jpgFileSize ?? 0)
+            case .nefOnly:
+                return total + (photo.nefFileSize ?? 0)
+            case .jpgAndNef:
+                return total + (photo.jpgFileSize ?? 0) + (photo.nefFileSize ?? 0)
+            case .movOnly:
+                return total + (photo.movFileSize ?? 0)
+            case .all, .hasMov:
+                return total + photo.totalFileSize
+            }
+        }
         return ByteCountFormatter.string(fromByteCount: total, countStyle: .file)
     }
 
