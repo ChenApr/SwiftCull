@@ -335,8 +335,8 @@ class PhotoStore: ObservableObject {
 
             switch fileTypeFilter {
             case .all: break
-            case .jpgOnly: if !(photo.hasJpg && !photo.hasNef && !photo.hasMov) { continue }
-            case .nefOnly: if !(photo.hasNef && !photo.hasJpg && !photo.hasMov) { continue }
+            case .jpgOnly: if !photo.hasJpg { continue }
+            case .nefOnly: if !photo.hasNef { continue }
             case .jpgAndNef: if !(photo.hasJpg && photo.hasNef) { continue }
             case .movOnly: if !photo.isVideoOnly { continue }
             case .hasMov: if !photo.hasMov { continue }
@@ -860,7 +860,7 @@ class PhotoStore: ObservableObject {
         }
     }
 
-    func exportFilteredPhotos() {
+    func exportFilteredPhotos(separateTypes: Bool = false) {
         guard !filteredPhotos.isEmpty else {
             exportMessage = "没有可导出的照片"
             return
@@ -900,10 +900,20 @@ class PhotoStore: ObservableObject {
             }
 
             for (index, photo) in photosToExport.enumerated() {
-                let paths: [String] = [photo.jpgPath, photo.nefPath, photo.movPath].compactMap { $0 }
-                for sourcePath in paths {
+                let files: [(path: String, subdirectory: String?)] = [
+                    photo.jpgPath.map { ($0, separateTypes ? "JPG" : nil) },
+                    photo.nefPath.map { ($0, separateTypes ? "RAW" : nil) },
+                    photo.movPath.map { ($0, nil) }
+                ].compactMap { $0 }
+                for (sourcePath, subdirectory) in files {
                     let fileName = (sourcePath as NSString).lastPathComponent
-                    let destPath = (destinationDir as NSString).appendingPathComponent(fileName)
+                    let fileDestination = subdirectory.map {
+                        (destinationDir as NSString).appendingPathComponent($0)
+                    } ?? destinationDir
+                    if !fm.fileExists(atPath: fileDestination) {
+                        try? fm.createDirectory(atPath: fileDestination, withIntermediateDirectories: true)
+                    }
+                    let destPath = (fileDestination as NSString).appendingPathComponent(fileName)
                     do {
                         try fm.copyItem(atPath: sourcePath, toPath: destPath)
                         exported += 1

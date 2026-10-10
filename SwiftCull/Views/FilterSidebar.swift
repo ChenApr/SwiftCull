@@ -2,6 +2,7 @@ import SwiftUI
 
 struct FilterSidebar: View {
     @EnvironmentObject var store: PhotoStore
+    @State private var showingExportOptions = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -29,6 +30,17 @@ struct FilterSidebar: View {
             }
         } message: {
             Text(store.exportMessage ?? "")
+        }
+        .confirmationDialog("导出方式", isPresented: $showingExportOptions, titleVisibility: .visible) {
+            Button("合并到同一文件夹") {
+                store.exportFilteredPhotos()
+            }
+            Button("JPG 和 RAW 分开") {
+                store.exportFilteredPhotos(separateTypes: true)
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("MOV 文件始终放在导出文件夹根目录")
         }
     }
 
@@ -459,7 +471,7 @@ struct FilterSidebar: View {
                     }
 
                     Button {
-                        store.exportFilteredPhotos()
+                        showingExportOptions = true
                     } label: {
                         VStack(spacing: 5) {
                             HStack(spacing: 6) {
