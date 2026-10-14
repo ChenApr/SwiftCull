@@ -182,6 +182,11 @@ enum SemiWatermarkRenderer {
         let compositeHeight = height + shadowPadding * 2 + cameraHeight
             + parameterHeight + spacing * 2
         let bottom = (canvasSize.height - compositeHeight) / 2 - short * 0.03
+        // PIL trims the glyphs to the requested height before concatenating them. AppKit
+        // draws from a baseline, so the equivalent visual bounds need separate offsets.
+        let cameraOffset = short * (nikon ? 0.0337 : 0.0224)
+        let parameterOffset = short * (nikon ? 0.0263 : 0.0188)
+        let photoOffset = short * (nikon ? 0.0024 : -0.0051)
 
         return try bitmap(size: canvasSize) { canvas in
             if let background = softBackground(image, radius: blurRadius) {
@@ -191,26 +196,26 @@ enum SemiWatermarkRenderer {
             }
             let photoRect = CGRect(x: (canvas.width - width) / 2,
                                    y: bottom + parameterHeight + cameraHeight
-                                       + spacing * 2 + shadowPadding,
+                                       + spacing * 2 + shadowPadding + photoOffset,
                                    width: width, height: height)
             drawPhoto(image, in: photoRect, radius: roundedRadius,
                       shadowRadius: shadowRadius, shadowColor: .black)
             let textCenter = canvas.midX
-            let parameterBottom = bottom + shadowPadding
-            let cameraBottom = parameterBottom + parameterHeight + spacing
+            let parameterBottom = bottom + shadowPadding - parameterOffset
+            let cameraBottom = bottom + shadowPadding + parameterHeight + spacing - cameraOffset
             if nikon, let range = metadata.camera.range(of: "Z") {
                 let before = String(metadata.camera[..<range.lowerBound])
                 let after = String(metadata.camera[range.upperBound...])
                 drawRichCamera(before: before, after: after, x: textCenter,
-                               bottom: cameraBottom, height: cameraHeight * 0.75,
+                               bottom: cameraBottom, height: cameraHeight * 1.5,
                                maxWidth: canvas.width * 0.85)
             } else {
                 draw(metadata.camera, x: textCenter, bottom: cameraBottom,
-                     height: cameraHeight * 0.75, color: .white, weight: .bold,
+                     height: cameraHeight, color: .white, weight: .bold,
                      alignment: .center, maxWidth: canvas.width * 0.85)
             }
             draw(metadata.parameters, x: textCenter, bottom: parameterBottom,
-                 height: parameterHeight * 0.75, color: .white, weight: .light,
+                 height: short * 0.037, color: .white, weight: .light,
                  alignment: .center, maxWidth: canvas.width * 0.85)
         }
     }
