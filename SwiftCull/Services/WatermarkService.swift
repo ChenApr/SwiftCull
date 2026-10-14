@@ -4,7 +4,7 @@ import ImageIO
 
 /// Native renditions of the 15 named templates in semi-utils/config/templates.
 /// Keeping the drawing in Swift lets previews and exports use the same renderer.
-enum WatermarkPreset: String, CaseIterable, Identifiable, Sendable {
+enum WatermarkPreset: String, CaseIterable, Identifiable, Codable, Sendable {
     case standard = "标准水印"
     case standardCard = "标准水印2"
     case nikonBlur = "尼康专用背景模糊"
@@ -286,11 +286,42 @@ enum WatermarkService {
         return data
     }
 
+    static func previewData(photo: PhotoEntry, configuration: WatermarkConfiguration,
+                            sourcePath: String? = nil) throws -> Data {
+        guard let data = try WatermarkCustomRenderer.render(photo: photo, configuration: configuration,
+                                                            sourcePath: sourcePath, maxPixelSize: 1200)
+            .representation(using: .jpeg, properties: [.compressionFactor: 0.8]) else {
+            throw WatermarkError.encodingFailed
+        }
+        return data
+    }
+
+    static func jpegData(photo: PhotoEntry, configuration: WatermarkConfiguration,
+                         sourcePath: String? = nil) throws -> Data {
+        guard let data = try WatermarkCustomRenderer.render(photo: photo, configuration: configuration,
+                                                            sourcePath: sourcePath)
+            .representation(using: .jpeg, properties: [.compressionFactor: 0.92]) else {
+            throw WatermarkError.encodingFailed
+        }
+        return data
+    }
+
     @discardableResult
     static func export(photo: PhotoEntry, preset: WatermarkPreset, sourcePath: String,
                        matchOrientation: Bool, to directory: URL) throws -> URL {
         let data = try jpegData(photo: photo, preset: preset, sourcePath: sourcePath,
                                 matchOrientation: matchOrientation)
+        return try write(data, sourcePath: sourcePath, to: directory)
+    }
+
+    @discardableResult
+    static func export(photo: PhotoEntry, configuration: WatermarkConfiguration,
+                       sourcePath: String, to directory: URL) throws -> URL {
+        let data = try jpegData(photo: photo, configuration: configuration, sourcePath: sourcePath)
+        return try write(data, sourcePath: sourcePath, to: directory)
+    }
+
+    private static func write(_ data: Data, sourcePath: String, to directory: URL) throws -> URL {
         let source = URL(fileURLWithPath: sourcePath)
         let name = source.deletingPathExtension().lastPathComponent + "_watermark"
         let fileManager = FileManager.default
