@@ -968,4 +968,45 @@ class PhotoStore: ObservableObject {
             }
         }
     }
+
+    func exportWatermarkedPhotos(preset: WatermarkPreset, matchOrientation: Bool, to directory: URL) {
+        let photosToExport = filteredPhotos.filter { $0.jpgPath != nil || $0.nefPath != nil }
+        guard !photosToExport.isEmpty, !isExporting else { return }
+        let preferRaw = filterOptions.fileTypeFilter == .nefOnly
+        isExporting = true
+        exportProgress = 0
+
+        Task.detached(priority: .utility) {
+            var exported = 0
+            var failures: [String] = []
+            for (index, photo) in photosToExport.enumerated() {
+                do {
+                    guard let sourcePath = photo.watermarkSourcePath(preferRaw: preferRaw) else {
+                        throw WatermarkError.unreadableImage
+                    }
+                    try WatermarkService.export(photo: photo, preset: preset,
+                                                sourcePath: sourcePath,
+                                                matchOrientation: matchOrientation,
+                                                to: directory)
+                    exported += 1
+                } catch {
+                    failures.append("\(photo.displayName)：\(error.localizedDescription)")
+                }
+                let progress = Double(index + 1) / Double(photosToExport.count)
+                await MainActor.run { [weak self] in self?.exportProgress = progress }
+            }
+
+            let completed = exported
+            let firstFailure = failures.first
+            let failed = failures.count
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                self.isExporting = false
+                self.exportProgress = 0
+                self.exportMessage = failed == 0
+                    ? "已输出 \(completed) 张水印照片到 \(directory.path)"
+                    : "水印导出完成：\(completed) 张成功，\(failed) 张失败。首个错误：\(firstFailure ?? "未知错误")"
+            }
+        }
+    }
 }
