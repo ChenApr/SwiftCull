@@ -9,7 +9,6 @@ struct SwiftCullApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(store)
-                .frame(minWidth: 1000, minHeight: 600)
                 .onAppear {
                     setupKeyboardMonitor()
                 }

@@ -6,28 +6,26 @@ struct ContentView: View {
     @State private var showInspector = false
     @State private var availableWidth: CGFloat = 1200
 
-    private let sidebarBreakpoint: CGFloat = 900
-    private let inspectorBreakpoint: CGFloat = 700
+    private let sidebarBreakpoint: CGFloat = 1120
+    private let inspectorBreakpoint: CGFloat = 800
 
     var body: some View {
-        NavigationSplitView(columnVisibility: $sidebarVisibility) {
-            FilterSidebar()
-                .navigationSplitViewColumnWidth(min: 230, ideal: 260, max: 300)
-        } detail: {
-            mainContent
-                .inspector(isPresented: $showInspector) {
-                    inspectorPanel
-                        .inspectorColumnWidth(min: 320, ideal: 380, max: 460)
-                }
-                .toolbar { toolbarContent }
-        }
-        .navigationSplitViewStyle(.balanced)
-        .background {
-            GeometryReader { geo in
-                Color.clear
-                    .onAppear { adapt(to: geo.size.width) }
-                    .onChange(of: geo.size.width) { _, newWidth in adapt(to: newWidth) }
+        GeometryReader { geometry in
+            NavigationSplitView(columnVisibility: $sidebarVisibility) {
+                FilterSidebar()
+                    .navigationSplitViewColumnWidth(min: 230, ideal: 260, max: 300)
+            } detail: {
+                mainContent
+                    .inspector(isPresented: $showInspector) {
+                        inspectorPanel
+                            .inspectorColumnWidth(min: 320, ideal: 360, max: 460)
+                    }
+                    .toolbar { toolbarContent }
             }
+            .navigationSplitViewStyle(.balanced)
+            .frame(width: geometry.size.width, height: geometry.size.height)
+            .onAppear { adapt(to: geometry.size.width) }
+            .onChange(of: geometry.size.width) { _, width in adapt(to: width) }
         }
         .alert("确认删除", isPresented: $store.showingDeleteConfirmation) {
             Button("取消", role: .cancel) {
@@ -68,6 +66,11 @@ struct ContentView: View {
         .onChange(of: store.isSidebarVisible) { _, isVisible in
             sidebarVisibility = isVisible ? .all : .detailOnly
         }
+        .onChange(of: sidebarVisibility) { _, visibility in
+            if visibility == .all, availableWidth < sidebarBreakpoint {
+                showInspector = false
+            }
+        }
     }
 
     @ToolbarContentBuilder
@@ -95,6 +98,9 @@ struct ContentView: View {
             }
 
             Button {
+                if !showInspector, availableWidth < sidebarBreakpoint {
+                    sidebarVisibility = .detailOnly
+                }
                 showInspector.toggle()
             } label: {
                 Label(showInspector ? "隐藏详情" : "显示详情", systemImage: "sidebar.right")
@@ -143,7 +149,7 @@ struct ContentView: View {
 
     private func adapt(to width: CGFloat) {
         availableWidth = width
-        // 渐进式收起：先收左侧栏(<900)，窗口更窄(<700)再收右侧详情
+        // Keep the grid usable as the window narrows: hide filters before the inspector.
         let targetSidebar: NavigationSplitViewVisibility = width >= sidebarBreakpoint ? .all : .detailOnly
         if sidebarVisibility != targetSidebar {
             sidebarVisibility = targetSidebar

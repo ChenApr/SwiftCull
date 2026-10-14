@@ -61,15 +61,10 @@ struct ShortcutHintBar: View {
                 .foregroundStyle(store.isSelectMode ? Color.accentColor : .secondary)
                 .labelStyle(.titleAndIcon)
 
-            ForEach(hints) { hint in
-                HStack(spacing: 4) {
-                    ForEach(Array(hint.keys.enumerated()), id: \.offset) { _, key in
-                        KeycapView(label: key)
-                    }
-                    Text(hint.label)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
+            ViewThatFits(in: .horizontal) {
+                hintRow(hints)
+                hintRow(Array(hints.prefix(2)))
+                hintRow(Array(hints.prefix(1)))
             }
 
             Spacer(minLength: 0)
@@ -78,6 +73,23 @@ struct ShortcutHintBar: View {
         .padding(.vertical, 5)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.bar)
+    }
+
+    private func hintRow(_ items: [ShortcutHintItem]) -> some View {
+        HStack(spacing: 14) {
+            ForEach(items) { hint in
+                HStack(spacing: 4) {
+                    ForEach(Array(hint.keys.enumerated()), id: \.offset) { _, key in
+                        KeycapView(label: key)
+                    }
+                    Text(hint.label)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+        }
+        .fixedSize(horizontal: true, vertical: false)
     }
 
     private var contextTitle: String {
