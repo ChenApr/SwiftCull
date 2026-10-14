@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct PhotoEntry: Identifiable, Hashable, Sendable {
-    let id: String
+    var id: String
     let baseName: String
     let jpgPath: String?
     let nefPath: String?
@@ -14,6 +14,13 @@ struct PhotoEntry: Identifiable, Hashable, Sendable {
     var rating: Int
     var tags: [String]
     var isDeleted: Bool
+    /// nil is the main version. Copies share source files but have independent crop state.
+    var versionID: UUID? = nil
+    var versionName: String? = nil
+    var cropRect: CropRect? = nil
+
+    var sourceID: String { baseName }
+    var isVersionCopy: Bool { versionID != nil }
 
     init(baseName: String, jpgPath: String?, nefPath: String?, movPath: String?,
          jpgFileSize: Int64?, nefFileSize: Int64?, movFileSize: Int64?, fileDate: Date, modificationDate: Date) {
@@ -37,7 +44,16 @@ struct PhotoEntry: Identifiable, Hashable, Sendable {
     var hasMov: Bool { movPath != nil }
     var isVideoOnly: Bool { hasMov && !hasJpg && !hasNef }
 
-    var displayName: String { baseName }
+    var displayName: String { versionName ?? baseName }
+
+    func asVersion(_ version: CropVersion) -> PhotoEntry {
+        var copy = self
+        copy.versionID = version.id
+        copy.versionName = version.name
+        copy.cropRect = version.crop
+        copy.id = version.id.map { "\(baseName)::\($0.uuidString)" } ?? baseName
+        return copy
+    }
 
     var totalFileSize: Int64 {
         (jpgFileSize ?? 0) + (nefFileSize ?? 0) + (movFileSize ?? 0)

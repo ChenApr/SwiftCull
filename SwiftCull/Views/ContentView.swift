@@ -38,7 +38,10 @@ struct ContentView: View {
             }
         } message: {
             if store.photosToDelete.count == 1 {
-                Text("将此照片（所有格式文件）移至废纸篓？此操作可通过废纸篓恢复。")
+                let hasVersions = store.photosToDelete.first.map { store.versionCount(for: $0) > 1 } ?? false
+                Text(hasVersions
+                     ? "将此照片的所有格式文件移至废纸篓，并移除它的裁剪版本？原文件可通过废纸篓恢复。"
+                     : "将此照片（所有格式文件）移至废纸篓？此操作可通过废纸篓恢复。")
             } else {
                 Text("将 \(store.photosToDelete.count) 张照片（所有格式文件）移至废纸篓？此操作可通过废纸篓恢复。")
             }
@@ -53,6 +56,9 @@ struct ContentView: View {
         }
         .sheet(isPresented: $store.showingShortcutGuide) {
             ShortcutGuideView()
+        }
+        .sheet(item: $store.cropEditorPhoto) { photo in
+            PhotoCropEditorView(photo: photo).environmentObject(store)
         }
         .task {
             store.detectVolumes()

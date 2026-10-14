@@ -42,6 +42,9 @@ class PhotoStore: ObservableObject {
     @Published var showingShortcutGuide = false
     @Published var isSelectMode = false
     @Published var detectedVolumes: [DetectedVolume] = []
+    @Published var cropEditorPhoto: PhotoEntry?
+    @Published var expandedVersionSources: Set<String> = []
+    private var cropVersions: [String: [CropVersion]] = [:]
 
     private let fileService = FileService.shared
     private let tagService = TagService.shared
@@ -91,7 +94,8 @@ class PhotoStore: ObservableObject {
     var totalPhotoCount: Int { photos.count }
 
     var totalSize: String {
-        let total = filteredPhotos.reduce(Int64(0)) { total, photo in
+        let uniquePhotos = Dictionary(grouping: filteredPhotos, by: \.sourceID).values.compactMap(\.first)
+        let total = uniquePhotos.reduce(Int64(0)) { total, photo in
             switch filterOptions.fileTypeFilter {
             case .jpgOnly:
                 return total + (photo.jpgFileSize ?? 0)
@@ -115,6 +119,126 @@ class PhotoStore: ObservableObject {
 
     var selectedCount: Int { selectedPhotos.count }
 
+    func versions(for photo: PhotoEntry) -> [PhotoEntry] {
+        photos.filter { $0.sourceID == photo.sourceID && !$0.isDeleted }
+    }
+
+    func versionCount(for photo: PhotoEntry) -> Int {
+        cropVersions[photo.sourceID]?.count ?? 1
+    }
+
+    func toggleVersions(for photo: PhotoEntry) {
+        if expandedVersionSources.contains(photo.sourceID) {
+            expandedVersionSources.remove(photo.sourceID)
+            if selectedPhoto?.sourceID == photo.sourceID, selectedPhoto?.isVersionCopy == true,
+               let main = photos.first(where: { $0.sourceID == photo.sourceID && !$0.isVersionCopy }) {
+                selectPhoto(main)
+            }
+        } else {
+            expandedVersionSources.insert(photo.sourceID)
+        }
+        applyFilters()
+    }
+
+    func editCrop(_ photo: PhotoEntry) {
+        guard !photo.isVideoOnly else { return }
+        cropEditorPhoto = photo
+    }
+
+    func previewPhoto(_ photo: PhotoEntry) {
+        guard !photo.primaryImagePath.isEmpty else {
+            if let movPath = photo.movPath { QuickLookHelper.shared.preview(URL(fileURLWithPath: movPath)) }
+            return
+        }
+        guard photo.cropRect != nil else {
+            QuickLookHelper.shared.preview(URL(fileURLWithPath: photo.primaryImagePath))
+            return
+        }
+        Task { [weak self] in
+            let result = await Task.detached(priority: .userInitiated) { () -> Result<URL, Error> in
+                do {
+                    let folder = FileManager.default.temporaryDirectory
+                        .appendingPathComponent("SwiftCull-CropPreview-\(UUID().uuidString)")
+                    return .success(try CropImageService.write(photo: photo,
+                                                               sourcePath: photo.primaryImagePath,
+                                                               into: folder))
+                } catch { return .failure(error) }
+            }.value
+            switch result {
+            case .success(let url): QuickLookHelper.shared.preview(url)
+            case .failure(let error): self?.exportMessage = "预览裁剪照片失败：\(error.localizedDescription)"
+            }
+        }
+    }
+
+    @discardableResult
+    func saveCrop(_ crop: CropRect?, for photo: PhotoEntry, createCopy: Bool, name: String) -> Bool {
+        guard !sourcePath.isEmpty else { return false }
+        guard let source = photos.first(where: { $0.sourceID == photo.sourceID && $0.versionID == nil }) else { return false }
+        let cleanCrop = crop?.normalized.isFull == true ? nil : crop?.normalized
+        var versions = cropVersions[photo.sourceID] ?? [CropVersion(id: nil, name: nil, crop: nil)]
+        let version: CropVersion
+        if createCopy {
+            let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            let defaultName = "裁剪 \(versions.filter { $0.id != nil }.count + 1)"
+            version = CropVersion(id: UUID(), name: trimmed.isEmpty ? defaultName : trimmed, crop: cleanCrop)
+            versions.append(version)
+        } else {
+            version = CropVersion(id: photo.versionID, name: photo.versionName, crop: cleanCrop)
+            if let index = versions.firstIndex(where: { $0.id == photo.versionID }) {
+                versions[index] = version
+            } else {
+                versions.append(version)
+            }
+        }
+        var updatedCatalog = cropVersions
+        updatedCatalog[photo.sourceID] = versions
+        do { try CropCatalog.save(updatedCatalog, folder: sourcePath) }
+        catch { exportMessage = "裁剪版本保存失败：\(error.localizedDescription)"; return false }
+        cropVersions = updatedCatalog
+        if createCopy { expandedVersionSources.insert(photo.sourceID) }
+        let updated = source.asVersion(version)
+        if createCopy {
+            photos.append(updated)
+        } else if let index = photos.firstIndex(where: { $0.id == photo.id }) {
+            photos[index] = updated
+        }
+        applyFilters()
+        selectPhoto(updated)
+        cropEditorPhoto = nil
+        return true
+    }
+
+    func renameVersion(_ photo: PhotoEntry, to name: String) {
+        guard photo.isVersionCopy else { return }
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              var versions = cropVersions[photo.sourceID],
+              let index = versions.firstIndex(where: { $0.id == photo.versionID }) else { return }
+        versions[index].name = trimmed
+        var updatedCatalog = cropVersions
+        updatedCatalog[photo.sourceID] = versions
+        do { try CropCatalog.save(updatedCatalog, folder: sourcePath) }
+        catch { exportMessage = "版本重命名失败：\(error.localizedDescription)"; return }
+        cropVersions = updatedCatalog
+        if let photoIndex = photos.firstIndex(where: { $0.id == photo.id }) { photos[photoIndex].versionName = trimmed }
+        applyFilters()
+        if selectedPhoto?.id == photo.id { selectedPhoto?.versionName = trimmed }
+    }
+
+    func removeVersion(_ photo: PhotoEntry) {
+        guard photo.isVersionCopy else { return }
+        var updatedCatalog = cropVersions
+        updatedCatalog[photo.sourceID]?.removeAll { $0.id == photo.versionID }
+        do { try CropCatalog.save(updatedCatalog, folder: sourcePath) }
+        catch { exportMessage = "删除版本失败：\(error.localizedDescription)"; return }
+        cropVersions = updatedCatalog
+        photos.removeAll { $0.id == photo.id }
+        selectedPhotos.remove(photo.id)
+        if selectedPhoto?.id == photo.id { selectPhoto(photos.first { $0.sourceID == photo.sourceID }) }
+        applyFilters()
+    }
+
     /// Actions on a selected card use the visible selection; an unselected card is a single target.
     func contextPhotos(clicked photo: PhotoEntry? = nil, useSelection: Bool = true) -> [PhotoEntry] {
         PhotoActionScope.targets(clicked: photo, selectedIDs: selectedPhotos,
@@ -124,15 +248,36 @@ class PhotoStore: ObservableObject {
 
     @discardableResult
     func copyOriginalFiles(clicked photo: PhotoEntry? = nil, useSelection: Bool = true) -> Bool {
-        let paths = contextPhotos(clicked: photo, useSelection: useSelection).flatMap { entry in
-            [entry.jpgPath, entry.nefPath, entry.movPath].compactMap { $0 }
+        let targets = contextPhotos(clicked: photo, useSelection: useSelection)
+        guard !targets.isEmpty else { return false }
+        if targets.allSatisfy({ $0.cropRect == nil && !$0.isVersionCopy }) {
+            let paths = targets.flatMap { [$0.jpgPath, $0.nefPath, $0.movPath].compactMap { $0 } }
+            let urls = paths.filter { FileManager.default.fileExists(atPath: $0) }
+                .map { URL(fileURLWithPath: $0) as NSURL }
+            guard !urls.isEmpty else { return false }
+            NSPasteboard.general.clearContents()
+            return NSPasteboard.general.writeObjects(urls)
         }
-        let urls = paths.filter { FileManager.default.fileExists(atPath: $0) }
-            .map { URL(fileURLWithPath: $0) as NSURL }
-        guard !urls.isEmpty else { return false }
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        return pasteboard.writeObjects(urls)
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SwiftCull-CropClipboard-\(UUID().uuidString)", isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            var urls: [NSURL] = []
+            for entry in targets {
+                for path in [entry.jpgPath, entry.nefPath, entry.movPath].compactMap({ $0 }) {
+                    let output = path == entry.movPath
+                        ? try CropImageService.copyOrRender(photo: entry.asVersion(CropVersion(id: nil, name: nil, crop: nil)),
+                                                            sourcePath: path, into: directory)
+                        : try CropImageService.copyOrRender(photo: entry, sourcePath: path, into: directory)
+                    urls.append(output as NSURL)
+                }
+            }
+            NSPasteboard.general.clearContents()
+            return NSPasteboard.general.writeObjects(urls)
+        } catch {
+            exportMessage = "复制裁剪照片失败：\(error.localizedDescription)"
+            return false
+        }
     }
 
     func contextSetRating(_ rating: Int, clicked photo: PhotoEntry, useSelection: Bool = true) {
@@ -179,6 +324,8 @@ class PhotoStore: ObservableObject {
         loadingStatus = "准备读取文件夹..."
         errorMessage = nil
         selectedPhoto = nil
+        cropEditorPhoto = nil
+        expandedVersionSources = []
         selectedPhotos = []
         photosToDelete = []
         showingDeleteConfirmation = false
@@ -217,10 +364,15 @@ class PhotoStore: ObservableObject {
 
         // 立即读取评分（UserDefaults，很快）与 sidecar 星级，让网格第一时间可用
         sidecarEntries = projectMetadata.load(from: sourcePath)
-        var initial = fast
+        cropVersions = CropCatalog.load(folder: sourcePath)
+        var initial = fast.flatMap { source -> [PhotoEntry] in
+            let versions = cropVersions[source.sourceID] ?? [CropVersion(id: nil, name: nil, crop: nil)]
+            let main = versions.first(where: { $0.id == nil }) ?? CropVersion(id: nil, name: nil, crop: nil)
+            return [source.asVersion(main)] + versions.filter { $0.id != nil }.map(source.asVersion)
+        }
         for i in initial.indices {
-            initial[i].rating = ratingService.getRating(for: initial[i].id)
-            if let meta = sidecarEntries[initial[i].id], let r = meta.rating, r > 0 {
+            initial[i].rating = ratingService.getRating(for: initial[i].sourceID)
+            if let meta = sidecarEntries[initial[i].sourceID], let r = meta.rating, r > 0 {
                 initial[i].rating = r
             }
         }
@@ -315,6 +467,7 @@ class PhotoStore: ObservableObject {
                     fileDate: exifDate!,
                     modificationDate: photo.modificationDate
                 )
+                updated = updated.asVersion(CropVersion(id: photo.versionID, name: photo.versionName, crop: photo.cropRect))
                 updated.rating = photo.rating
                 updated.tags = photo.tags
                 updated.isDeleted = photo.isDeleted
@@ -346,7 +499,7 @@ class PhotoStore: ObservableObject {
         var entries: [String: PhotoMetadata] = [:]
         for photo in photos {
             if photo.rating > 0 {
-                entries[photo.id] = PhotoMetadata(rating: photo.rating)
+                entries[photo.sourceID] = PhotoMetadata(rating: photo.rating)
             }
         }
         sidecarEntries = entries
@@ -386,8 +539,10 @@ class PhotoStore: ObservableObject {
 
         for photo in photos {
             if photo.isDeleted { continue }
+            if photo.isVersionCopy && !expandedVersionSources.contains(photo.sourceID) { continue }
 
-            if let query, !photo.baseName.lowercased().contains(query) { continue }
+            if let query, !photo.baseName.lowercased().contains(query),
+               !photo.displayName.lowercased().contains(query) { continue }
 
             switch ratingFilter {
             case .all: break
@@ -421,43 +576,48 @@ class PhotoStore: ObservableObject {
     }
 
     private func sortPhotos(_ photos: [PhotoEntry]) -> [PhotoEntry] {
+        let grouped = Dictionary(grouping: photos, by: \.sourceID)
+        let representatives = grouped.values.compactMap { group in
+            group.first(where: { !$0.isVersionCopy }) ?? group.first
+        }
         let sorted: [PhotoEntry]
         switch filterOptions.sortOption {
         case .name:
-            sorted = photos.sorted { $0.baseName < $1.baseName }
+            sorted = representatives.sorted { $0.baseName < $1.baseName }
         case .date:
-            sorted = photos.sorted { $0.fileDate < $1.fileDate }
+            sorted = representatives.sorted { $0.fileDate == $1.fileDate ? $0.baseName < $1.baseName : $0.fileDate < $1.fileDate }
         case .rating:
-            sorted = photos.sorted { $0.rating > $1.rating }
+            sorted = representatives.sorted { $0.rating == $1.rating ? $0.baseName < $1.baseName : $0.rating > $1.rating }
         case .size:
-            sorted = photos.sorted { $0.totalFileSize > $1.totalFileSize }
+            sorted = representatives.sorted { $0.totalFileSize == $1.totalFileSize ? $0.baseName < $1.baseName : $0.totalFileSize > $1.totalFileSize }
         }
-        return filterOptions.sortAscending ? sorted : sorted.reversed()
+        let sources = filterOptions.sortAscending ? sorted : Array(sorted.reversed())
+        return sources.flatMap { source in
+            (grouped[source.sourceID] ?? []).sorted {
+                if $0.isVersionCopy != $1.isVersionCopy { return !$0.isVersionCopy }
+                return $0.displayName < $1.displayName
+            }
+        }
     }
 
     func setRating(_ rating: Int, for photo: PhotoEntry) {
-        guard let index = photos.firstIndex(where: { $0.id == photo.id }) else { return }
-        ratingService.setRating(rating, for: photo.id)
-        photos[index].rating = rating
-        if let filteredIndex = filteredPhotos.firstIndex(where: { $0.id == photo.id }) {
-            filteredPhotos[filteredIndex].rating = rating
-        }
-        if selectedPhoto?.id == photo.id {
-            selectedPhoto?.rating = rating
-        }
+        ratingService.setRating(rating, for: photo.sourceID)
+        for index in photos.indices where photos[index].sourceID == photo.sourceID { photos[index].rating = rating }
+        for index in filteredPhotos.indices where filteredPhotos[index].sourceID == photo.sourceID { filteredPhotos[index].rating = rating }
+        if selectedPhoto?.sourceID == photo.sourceID { selectedPhoto?.rating = rating }
         syncSidecar()
     }
 
     func clearTags(for photo: PhotoEntry) {
         guard let index = photos.firstIndex(where: { $0.id == photo.id }) else { return }
         _ = tagService.setTagsForPhotoPair([], photo: photos[index])
-        photos[index].tags = []
-        if let filteredIndex = filteredPhotos.firstIndex(where: { $0.id == photo.id }) {
-            filteredPhotos[filteredIndex].tags = []
-        }
-        if selectedPhoto?.id == photo.id {
-            selectedPhoto?.tags = []
-        }
+        setSharedTags([], sourceID: photo.sourceID)
+    }
+
+    private func setSharedTags(_ tags: [String], sourceID: String) {
+        for index in photos.indices where photos[index].sourceID == sourceID { photos[index].tags = tags }
+        for index in filteredPhotos.indices where filteredPhotos[index].sourceID == sourceID { filteredPhotos[index].tags = tags }
+        if selectedPhoto?.sourceID == sourceID { selectedPhoto?.tags = tags }
     }
 
     func toggleSinglePreview() {
@@ -491,6 +651,8 @@ class PhotoStore: ObservableObject {
 
     private func setRatings(_ rating: Int, for ids: Set<String>) {
         guard !ids.isEmpty else { return }
+        let sourceIDs = Set(photos.filter { ids.contains($0.id) }.map(\.sourceID))
+        let ids = Set(photos.filter { sourceIDs.contains($0.sourceID) }.map(\.id))
         let photoMap = buildPhotoIndexMap()
         let filteredMap = buildFilteredIndexMap()
 
@@ -518,6 +680,8 @@ class PhotoStore: ObservableObject {
 
     private func updateTag(_ tag: String, adding: Bool, for ids: Set<String>) {
         guard !ids.isEmpty else { return }
+        let sourceIDs = Set(photos.filter { ids.contains($0.id) }.map(\.sourceID))
+        let ids = Set(photos.filter { sourceIDs.contains($0.sourceID) }.map(\.id))
         let photoMap = buildPhotoIndexMap()
         let filteredMap = buildFilteredIndexMap()
 
@@ -553,6 +717,8 @@ class PhotoStore: ObservableObject {
 
     private func clearTags(for ids: Set<String>) {
         guard !ids.isEmpty else { return }
+        let sourceIDs = Set(photos.filter { ids.contains($0.id) }.map(\.sourceID))
+        let ids = Set(photos.filter { sourceIDs.contains($0.sourceID) }.map(\.id))
         let photoMap = buildPhotoIndexMap()
         let filteredMap = buildFilteredIndexMap()
 
@@ -576,13 +742,7 @@ class PhotoStore: ObservableObject {
         if !currentTags.contains(tag) {
             currentTags.append(tag)
             _ = tagService.setTagsForPhotoPair(currentTags, photo: photos[index], colorLookup: tagColorLookup)
-            photos[index].tags = currentTags
-            if let filteredIndex = filteredPhotos.firstIndex(where: { $0.id == photo.id }) {
-                filteredPhotos[filteredIndex].tags = currentTags
-            }
-            if selectedPhoto?.id == photo.id {
-                selectedPhoto?.tags = currentTags
-            }
+            setSharedTags(currentTags, sourceID: photo.sourceID)
         }
     }
 
@@ -591,13 +751,7 @@ class PhotoStore: ObservableObject {
         var currentTags = photos[index].tags
         currentTags.removeAll { $0 == tag }
         _ = tagService.setTagsForPhotoPair(currentTags, photo: photos[index], colorLookup: tagColorLookup)
-        photos[index].tags = currentTags
-        if let filteredIndex = filteredPhotos.firstIndex(where: { $0.id == photo.id }) {
-            filteredPhotos[filteredIndex].tags = currentTags
-        }
-        if selectedPhoto?.id == photo.id {
-            selectedPhoto?.tags = currentTags
-        }
+        setSharedTags(currentTags, sourceID: photo.sourceID)
     }
 
     // MARK: - 选择模式
@@ -650,9 +804,11 @@ class PhotoStore: ObservableObject {
         var pending: [PendingWrite] = []
         var ratingChangedAtAll = false
 
+        var queuedSources: Set<String> = []
         for (id, original) in editedOriginals {
             guard let index = photoMap[id] else { continue }
             let current = photos[index]
+            guard queuedSources.insert(current.sourceID).inserted else { continue }
             let ratingChanged = current.rating != original.rating
             let tagsChanged = current.tags != original.tags
             guard ratingChanged || tagsChanged else { continue }
@@ -669,7 +825,7 @@ class PhotoStore: ObservableObject {
             let tagService = TagService.shared
             for write in pending {
                 if write.ratingChanged {
-                    ratingService.setRating(write.photo.rating, for: write.photo.id)
+                    ratingService.setRating(write.photo.rating, for: write.photo.sourceID)
                 }
                 if write.tagsChanged {
                     _ = tagService.setTagsForPhotoPair(write.photo.tags, photo: write.photo, colorLookup: colorLookup)
@@ -780,7 +936,8 @@ class PhotoStore: ObservableObject {
 
     func confirmDelete() {
         let deleteRequest = photosToDelete
-        let requestedDeleteIds = Set(deleteRequest.map(\.id))
+        let sourceIDs = Set(deleteRequest.map(\.sourceID))
+        let requestedDeleteIds = Set(photos.filter { sourceIDs.contains($0.sourceID) }.map(\.id))
         let previousFilteredPhotos = filteredPhotos
         let selectionAnchorIndex = deletionSelectionAnchorIndex(
             deleteIds: requestedDeleteIds,
@@ -795,10 +952,10 @@ class PhotoStore: ObservableObject {
 
         // Mark as deleted immediately for instant UI update
         var deletedIds: Set<String> = []
-        for photo in deleteRequest {
-            if let index = photoIndexByID[photo.id] {
+        for id in requestedDeleteIds {
+            if let index = photoIndexByID[id] {
                 photos[index].isDeleted = true
-                deletedIds.insert(photo.id)
+                deletedIds.insert(id)
             }
         }
 
@@ -812,7 +969,11 @@ class PhotoStore: ObservableObject {
 
         // Perform actual file I/O on background thread
         let fileServiceRef = self.fileService
-        let photosToTrash = deleteRequest.filter { deletedIds.contains($0.id) }
+        let photosToTrash = sourceIDs.compactMap { source in
+            deleteRequest.first { $0.sourceID == source }
+        }
+        for source in sourceIDs { cropVersions.removeValue(forKey: source) }
+        try? CropCatalog.save(cropVersions, folder: sourcePath)
         Task.detached(priority: .utility) {
             for photo in photosToTrash {
                 _ = fileServiceRef.movePhotoToTrash(photo)
@@ -1011,16 +1172,31 @@ class PhotoStore: ObservableObject {
                     ].compactMap { $0 }
                 }
                 for (sourcePath, subdirectory) in files {
-                    let fileName = (sourcePath as NSString).lastPathComponent
                     let fileDestination = subdirectory.map {
                         (destinationDir as NSString).appendingPathComponent($0)
                     } ?? destinationDir
                     if !fm.fileExists(atPath: fileDestination) {
                         try? fm.createDirectory(atPath: fileDestination, withIntermediateDirectories: true)
                     }
-                    let destPath = (fileDestination as NSString).appendingPathComponent(fileName)
                     do {
-                        try fm.copyItem(atPath: sourcePath, toPath: destPath)
+                        if sourcePath == photo.movPath {
+                            let source = URL(fileURLWithPath: sourcePath)
+                            let stem = source.deletingPathExtension().lastPathComponent +
+                                (photo.isVersionCopy ? "_\(photo.versionID!.uuidString.prefix(8))" : "")
+                            var candidate = URL(fileURLWithPath: fileDestination)
+                                .appendingPathComponent(stem).appendingPathExtension(source.pathExtension)
+                            var suffix = 2
+                            while fm.fileExists(atPath: candidate.path) {
+                                candidate = URL(fileURLWithPath: fileDestination)
+                                    .appendingPathComponent("\(stem)_\(suffix)")
+                                    .appendingPathExtension(source.pathExtension)
+                                suffix += 1
+                            }
+                            try fm.copyItem(at: source, to: candidate)
+                        } else {
+                            _ = try CropImageService.copyOrRender(photo: photo, sourcePath: sourcePath,
+                                                                  into: URL(fileURLWithPath: fileDestination))
+                        }
                         exported += 1
                     } catch {
                         failed += 1
@@ -1104,23 +1280,17 @@ class PhotoStore: ObservableObject {
             var errors: [String] = []
             for (index, path) in paths.enumerated() {
                 let source = URL(fileURLWithPath: path)
-                let stem = source.deletingPathExtension().lastPathComponent
-                let ext = source.pathExtension
-                var suffix = 1
-                while true {
-                    let name = suffix == 1 ? stem : "\(stem)_\(suffix)"
-                    let target = directory.appendingPathComponent(name).appendingPathExtension(ext)
-                    do {
-                        try FileManager.default.copyItem(at: source, to: target)
-                        count += 1
-                        break
-                    } catch {
-                        guard FileManager.default.fileExists(atPath: target.path) else {
-                            errors.append("\(source.lastPathComponent)：\(error.localizedDescription)")
-                            break
-                        }
-                        suffix += 1
+                do {
+                    if path == photo.movPath {
+                        _ = try CropImageService.copyOrRender(
+                            photo: photo.asVersion(CropVersion(id: nil, name: nil, crop: nil)),
+                            sourcePath: path, into: directory)
+                    } else {
+                        _ = try CropImageService.copyOrRender(photo: photo, sourcePath: path, into: directory)
                     }
+                    count += 1
+                } catch {
+                    errors.append("\(source.lastPathComponent)：\(error.localizedDescription)")
                 }
                 await MainActor.run { [weak self] in
                     self?.exportProgress = Double(index + 1) / Double(paths.count)

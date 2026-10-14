@@ -54,6 +54,7 @@ struct PhotoDetailView: View {
     @State private var exifInfo: PhotoExifInfo?
     @State private var exifTask: Task<Void, Never>?
     @State private var watermarkSelection: WatermarkPhotoSelection?
+    @State private var versionNameDraft = ""
 
     private var photo: PhotoEntry? {
         store.selectedPhoto
@@ -70,6 +71,7 @@ struct PhotoDetailView: View {
                 ScrollView {
                     VStack(spacing: 8) {
                         infoSection(photo)
+                        versionSection(photo)
                         exifSection(photo)
                         ratingSection(photo)
                         tagSection(photo)
@@ -83,6 +85,7 @@ struct PhotoDetailView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .onAppear {
                 loadExif(for: photo)
+                versionNameDraft = photo.displayName
             }
             .onDisappear {
                 exifTask?.cancel()
@@ -90,6 +93,7 @@ struct PhotoDetailView: View {
             }
             .onChange(of: photo.id) { _, _ in
                 loadExif(for: photo)
+                versionNameDraft = photo.displayName
             }
             .sheet(item: $watermarkSelection) { selection in
                 WatermarkExportView(store: store, photos: selection.photos)
@@ -150,14 +154,39 @@ struct PhotoDetailView: View {
     }
 
     private func openQuickLook(_ photo: PhotoEntry) {
-        let path = photo.primaryImagePath
-        guard !path.isEmpty else {
-            if let movPath = photo.movPath {
-                QuickLookHelper.shared.preview(URL(fileURLWithPath: movPath))
+        store.previewPhoto(photo)
+    }
+
+    @ViewBuilder
+    private func versionSection(_ photo: PhotoEntry) -> some View {
+        let versions = store.versions(for: photo)
+        if versions.count > 1 || photo.cropRect != nil {
+            DetailCard(title: "裁剪版本", systemImage: "square.stack.3d.up") {
+                VStack(alignment: .leading, spacing: 8) {
+                    if versions.count > 1 {
+                        Menu {
+                            ForEach(versions) { version in
+                                Button(version.isVersionCopy ? version.displayName : "主版本") {
+                                    store.expandedVersionSources.insert(photo.sourceID)
+                                    store.applyFilters()
+                                    store.selectPhoto(version)
+                                }
+                            }
+                        } label: {
+                            Label(photo.isVersionCopy ? photo.displayName : "主版本", systemImage: "square.stack")
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                    if photo.isVersionCopy {
+                        HStack {
+                            TextField("版本名称", text: $versionNameDraft)
+                            Button("重命名") { store.renameVersion(photo, to: versionNameDraft) }
+                        }
+                        Button("删除此版本", role: .destructive) { store.removeVersion(photo) }
+                    }
+                }
             }
-            return
         }
-        QuickLookHelper.shared.preview(URL(fileURLWithPath: path))
     }
 
     private func infoSection(_ photo: PhotoEntry) -> some View {
@@ -298,6 +327,12 @@ struct PhotoDetailView: View {
                     .compactMap { $0.map { URL(fileURLWithPath: $0) } }
 
                 if !allFiles.isEmpty {
+                    if !photo.isVideoOnly {
+                        Button { store.editCrop(photo) } label: {
+                            actionLabel("裁剪 / 编辑版本…", systemImage: "crop.rotate")
+                        }
+                        .buttonStyle(InspectorActionButtonStyle())
+                    }
                     Button {
                         NSWorkspace.shared.activateFileViewerSelecting(allFiles)
                     } label: {
@@ -308,7 +343,8 @@ struct PhotoDetailView: View {
                     Button {
                         store.exportOriginalPhoto(photo)
                     } label: {
-                        actionLabel("导出此照片原文件…", systemImage: "square.and.arrow.up")
+                        actionLabel(photo.cropRect == nil ? "导出此照片原文件…" : "导出此裁剪版本…",
+                                    systemImage: "square.and.arrow.up")
                     }
                     .buttonStyle(InspectorActionButtonStyle())
                     .disabled(store.isExporting)

@@ -280,6 +280,14 @@ struct PhotoSinglePreviewView: View {
                 Image(systemName: "plus.magnifyingglass")
             }
             .disabled(scale >= maxScale)
+
+            if !photo.isVideoOnly {
+                Divider().frame(height: 16)
+                Button { store.editCrop(photo) } label: {
+                    Image(systemName: "crop.rotate")
+                }
+                .help("裁剪 / 编辑版本")
+            }
         }
         .font(.system(size: 13, weight: .medium))
         .buttonStyle(.plain)

@@ -63,10 +63,35 @@ struct PhotoContextMenu: View {
 
         Divider()
 
+        if !isBatch && !photo.isVideoOnly {
+            Button { store.editCrop(photo) } label: {
+                Label("裁剪 / 编辑版本…", systemImage: "crop.rotate")
+            }
+            if store.versionCount(for: photo) > 1 {
+                Menu {
+                    ForEach(store.versions(for: photo)) { version in
+                        Button(version.isVersionCopy ? version.displayName : "主版本") {
+                            store.expandedVersionSources.insert(photo.sourceID)
+                            store.applyFilters()
+                            store.selectPhoto(version)
+                        }
+                    }
+                } label: {
+                    Label("切换裁剪版本", systemImage: "square.stack.3d.up")
+                }
+            }
+            if photo.isVersionCopy {
+                Button(role: .destructive) { store.removeVersion(photo) } label: {
+                    Label("删除此裁剪版本", systemImage: "square.stack.3d.up.slash")
+                }
+            }
+        }
+
         Button {
             store.copyOriginalFiles(clicked: photo, useSelection: useSelection)
         } label: {
-            Label(isBatch ? "复制所选原文件（\(targets.count) 张）" : "复制原文件（所有格式）",
+            Label(isBatch ? "复制所选版本（\(targets.count) 张）" :
+                  (photo.cropRect == nil ? "复制原文件（所有格式）" : "复制裁剪版本（所有格式）"),
                   systemImage: "document.on.document")
         }
         .disabled(sourceFiles.isEmpty)
@@ -82,7 +107,8 @@ struct PhotoContextMenu: View {
             if isBatch { store.exportSelectedPhotos() }
             else { store.exportOriginalPhoto(photo) }
         } label: {
-            Label(isBatch ? "导出所选 \(targets.count) 张照片…" : "导出原文件（所有格式）…",
+            Label(isBatch ? "导出所选 \(targets.count) 张照片…" :
+                  (photo.cropRect == nil ? "导出原文件（所有格式）…" : "导出裁剪版本（所有格式）…"),
                   systemImage: "square.and.arrow.up")
         }
         .disabled(sourceFiles.isEmpty || store.isExporting)

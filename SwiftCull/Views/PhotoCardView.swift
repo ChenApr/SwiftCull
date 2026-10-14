@@ -23,7 +23,8 @@ struct SelectablePhotoCardView: View {
                 photoId: photo.id,
                 imagePath: photo.primaryFilePath,
                 size: gridSize,
-                isVideo: photo.isVideoOnly
+                isVideo: photo.isVideoOnly,
+                crop: photo.cropRect
             )
             .frame(width: gridSize, height: gridSize)
 

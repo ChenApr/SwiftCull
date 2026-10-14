@@ -11,26 +11,11 @@ enum WatermarkCustomRenderer {
                                                     matchOrientation: configuration.matchOrientation == true,
                                                     maxPixelSize: maxPixelSize, configuration: configuration)
         }
-        guard let path = sourcePath ?? photo.watermarkSourcePath(preferRaw: false),
-              let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil) else {
+        guard let path = sourcePath ?? photo.watermarkSourcePath(preferRaw: false) else {
             throw WatermarkError.unreadableImage
         }
-        var options: [CFString: Any] = [
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceCreateThumbnailWithTransform: true
-        ]
-        if let maxPixelSize {
-            options[kCGImageSourceThumbnailMaxPixelSize] = maxPixelSize
-        } else {
-            let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
-            let width = properties?[kCGImagePropertyPixelWidth] as? Int ?? 0
-            let height = properties?[kCGImagePropertyPixelHeight] as? Int ?? 0
-            options[kCGImageSourceThumbnailMaxPixelSize] = max(width, height)
-        }
-        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
-                ?? CGImageSourceCreateImageAtIndex(source, 0, nil) else {
-            throw WatermarkError.unreadableImage
-        }
+        let cgImage = try CropImageService.image(path: path, crop: photo.cropRect,
+                                                 maxPixelSize: maxPixelSize)
         let exif = PhotoExifInfo.load(from: path, fallbackDate: photo.fileDate)
         let short = CGFloat(min(cgImage.width, cgImage.height))
         let padding = max(0, short * CGFloat(configuration.paddingPercent / 100))
