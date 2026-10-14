@@ -12,6 +12,8 @@ struct WatermarkConfiguration: Codable, Hashable, Identifiable, Sendable {
     var cornerRadiusPercent = 0.0
     var shadow = false
     var components: [WatermarkComponent]
+    /// New drafts retain the geometry of their semi-utils template. Nil keeps older saved presets compatible.
+    var templateLayout: Bool?
 
     enum Background: String, Codable, CaseIterable, Identifiable, Sendable {
         case solid = "纯色"
@@ -21,40 +23,50 @@ struct WatermarkConfiguration: Codable, Hashable, Identifiable, Sendable {
 
     static func draft(from preset: WatermarkPreset) -> WatermarkConfiguration {
         let portrait = preset.isPortraitPreset
-        let overlay = [.cornerParameters, .folderAndDate, .blur, .nikonBlur].contains(preset.layout)
-        let central: WatermarkComponent.Position = overlay ? .topCenter : (portrait ? .footerCenter : .footerLeft)
-        let secondary: WatermarkComponent.Position = overlay ? .bottomRight : (portrait ? .footerCenter : .footerRight)
-        let textColor = overlay ? "#FFFFFF" : "#202020"
+        let blurred = preset.layout == .blur || preset.layout == .nikonBlur
         var configuration = WatermarkConfiguration(
             name: "\(preset.rawValue) · 自定义", basePreset: preset,
-            background: [.blur, .nikonBlur].contains(preset.layout) ? .blurred : .solid,
-            backgroundHex: [.blur, .nikonBlur].contains(preset.layout) ? "#242424" : "#FFFFFF",
-            paddingPercent: [.card, .nikonCard].contains(preset.layout) ? 5 : 3,
-            footerPercent: overlay ? 0 : (portrait ? 18 : 13),
-            cornerRadiusPercent: [.card, .nikonCard].contains(preset.layout) ? 1.2 : 0,
-            shadow: [.card, .nikonCard].contains(preset.layout),
-            components: [
-                WatermarkComponent(kind: .camera, position: central, fontPercent: 2.4, colorHex: textColor, bold: true),
-                WatermarkComponent(kind: .lens, position: central, fontPercent: 1.5, colorHex: textColor),
-                WatermarkComponent(kind: .parameters, position: secondary, fontPercent: 1.8, colorHex: textColor, bold: true),
-                WatermarkComponent(kind: .date, position: secondary, fontPercent: 1.4, colorHex: textColor)
-            ]
+            background: blurred ? .blurred : .solid,
+            backgroundHex: "#FFFFFF",
+            paddingPercent: 0, footerPercent: 0, cornerRadiusPercent: 0,
+            shadow: [.card, .nikonCard, .blur, .nikonBlur].contains(preset.layout),
+            components: [], templateLayout: true
         )
         switch preset.layout {
         case .cornerParameters:
             configuration.components = [WatermarkComponent(kind: .parameters, position: .bottomRight,
-                                                            fontPercent: 2, colorHex: "#FFFFFF", bold: true)]
+                                                            fontPercent: 3, colorHex: "#FFFFFF", bold: true,
+                                                            slot: .overlayParameters)]
         case .folderAndDate:
-            configuration.components = [
-                WatermarkComponent(kind: .folder, position: .bottomRight, fontPercent: 2,
-                                   colorHex: "#FFFFFF", bold: true),
-                WatermarkComponent(kind: .date, position: .bottomRight, fontPercent: 1.5,
-                                   colorHex: "#FFFFFF")
-            ]
+            configuration.components = [WatermarkComponent(kind: .folderAndDate, position: .bottomRight,
+                                                            fontPercent: 3, colorHex: "#E88D34",
+                                                            slot: .overlayFolderDate)]
         case .centerBrand:
-            configuration.components = [WatermarkComponent(kind: .camera, position: .footerCenter,
-                                                            fontPercent: 2.8, bold: true)]
-        default: break
+            configuration.components = [WatermarkComponent(kind: .logo, position: .footerCenter,
+                                                            fontPercent: portrait ? 9 : 12,
+                                                            slot: .centerLogo)]
+        case .blur, .nikonBlur:
+            configuration.components = [
+                WatermarkComponent(kind: .camera, position: .bottomCenter, fontPercent: 4,
+                                   colorHex: "#FFFFFF", bold: true, slot: .blurCamera),
+                WatermarkComponent(kind: .parameters, position: .bottomCenter, fontPercent: 3.7,
+                                   colorHex: "#FFFFFF", slot: .blurParameters)
+            ]
+        case .standard, .card, .nikonCard:
+            let large = portrait ? 1.9323 : 3.051
+            let small = portrait ? 1.71 : 2.7
+            configuration.components = [
+                WatermarkComponent(kind: .camera, position: .footerLeft, fontPercent: large,
+                                   colorHex: "#000000", bold: true, slot: .footerCamera),
+                WatermarkComponent(kind: .lens, position: .footerLeft, fontPercent: small,
+                                   colorHex: "#242424", slot: .footerLens),
+                WatermarkComponent(kind: .parameters, position: .footerRight, fontPercent: large,
+                                   colorHex: "#242424", bold: true, slot: .footerParameters),
+                WatermarkComponent(kind: .date, position: .footerRight, fontPercent: small,
+                                   colorHex: "#242424", slot: .footerDate),
+                WatermarkComponent(kind: .logo, position: .footerRight, fontPercent: portrait ? 6.8 : 7.2,
+                                   slot: .footerLogo)
+            ]
         }
         return configuration
     }
@@ -68,6 +80,14 @@ struct WatermarkComponent: Codable, Hashable, Identifiable, Sendable {
     var fontPercent = 1.8
     var colorHex = "#202020"
     var bold = false
+    var slot: Slot?
+    /// PNG or JPEG bytes embedded in the preset so it survives moving the preset file.
+    var imageData: Data?
+
+    enum Slot: String, Codable, Sendable {
+        case footerCamera, footerLens, footerParameters, footerDate, footerLogo, centerLogo
+        case blurCamera, blurParameters, overlayParameters, overlayFolderDate
+    }
 
     enum Kind: String, Codable, CaseIterable, Identifiable, Sendable {
         case camera = "相机"
@@ -75,6 +95,8 @@ struct WatermarkComponent: Codable, Hashable, Identifiable, Sendable {
         case parameters = "拍摄参数"
         case date = "拍摄日期"
         case folder = "文件夹"
+        case folderAndDate = "文件夹与日期"
+        case logo = "Logo 图片"
         case customText = "自定义文字"
         var id: String { rawValue }
     }

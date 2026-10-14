@@ -5,6 +5,11 @@ import ImageIO
 enum WatermarkCustomRenderer {
     static func render(photo: PhotoEntry, configuration: WatermarkConfiguration,
                        sourcePath: String? = nil, maxPixelSize: Int? = nil) throws -> NSBitmapImageRep {
+        if configuration.templateLayout == true {
+            return try SemiWatermarkRenderer.render(photo: photo, preset: configuration.basePreset,
+                                                    sourcePath: sourcePath, matchOrientation: false,
+                                                    maxPixelSize: maxPixelSize, configuration: configuration)
+        }
         guard let path = sourcePath ?? photo.watermarkSourcePath(preferRaw: false),
               let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil) else {
             throw WatermarkError.unreadableImage
@@ -105,12 +110,24 @@ enum WatermarkCustomRenderer {
             : (bottom ? photoRect.minY + short * 0.03 : photoRect.maxY - short * 0.03)
         let lines = components.compactMap { component -> (WatermarkComponent, String)? in
             let value = text(for: component, exif: exif, path: path)
-            return value.isEmpty ? nil : (component, value)
+            return value.isEmpty && component.kind != .logo ? nil : (component, value)
         }
         let totalHeight = lines.reduce(CGFloat.zero) { $0 + short * CGFloat($1.0.fontPercent / 100) * 1.32 }
         var y = (bottom || isFooter) ? anchor + totalHeight : anchor
         for (component, value) in lines {
             let size = max(7, short * CGFloat(component.fontPercent / 100))
+            if component.kind == .logo {
+                y -= size * 1.32
+                let logo = component.imageData.flatMap(NSImage.init(data:))
+                    ?? SemiWatermarkRenderer.logo(for: exif.camera ?? "")
+                if let logo {
+                    let aspect = logo.size.width / max(logo.size.height, 1)
+                    let width = min(maxWidth, size * aspect)
+                    let originX = left ? x : (right ? x - width : x - width / 2)
+                    logo.draw(in: CGRect(x: originX, y: y, width: width, height: size))
+                }
+                continue
+            }
             let font = NSFont.systemFont(ofSize: size, weight: component.bold ? .semibold : .regular)
             let color = NSColor.watermarkHex(component.colorHex) ?? (isFooter ? .black : .white)
             let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: color]
@@ -144,6 +161,10 @@ enum WatermarkCustomRenderer {
                 .compactMap { $0 }.joined(separator: "  ").nilIfEmpty ?? "拍摄参数不可用"
         case .date: return exif.capturedAt ?? ""
         case .folder: return URL(fileURLWithPath: path).deletingLastPathComponent().lastPathComponent
+        case .folderAndDate:
+            let folder = URL(fileURLWithPath: path).deletingLastPathComponent().lastPathComponent
+            return "\(folder)    \(exif.capturedAt ?? "")"
+        case .logo: return ""
         case .customText: return component.text
         }
     }

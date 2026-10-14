@@ -1,5 +1,7 @@
 import AppKit
 import SwiftUI
+import ImageIO
+import UniformTypeIdentifiers
 
 struct WatermarkPresetEditorView: View {
     let photo: PhotoEntry?
@@ -89,19 +91,28 @@ struct WatermarkPresetEditorView: View {
     private var canvasSection: some View {
         GroupBox("画布与照片") {
             VStack(alignment: .leading, spacing: 12) {
-                Picker("背景", selection: $draft.background) {
-                    ForEach(WatermarkConfiguration.Background.allCases) { style in
-                        Text(style.rawValue).tag(style)
+                if draft.templateLayout == true &&
+                    (draft.basePreset.layout == .cornerParameters || draft.basePreset.layout == .folderAndDate) {
+                    Text("此模板直接在照片上叠加组件，画布尺寸与原图一致。")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    Picker("背景", selection: $draft.background) {
+                        ForEach(WatermarkConfiguration.Background.allCases) { style in
+                            Text(style.rawValue).tag(style)
+                        }
                     }
+                    ColorPicker("背景颜色", selection: Binding(
+                        get: { Color(nsColor: NSColor.watermarkHex(draft.backgroundHex) ?? .white) },
+                        set: { draft.backgroundHex = NSColor($0).watermarkHexString }
+                    ))
+                    valueSlider(draft.templateLayout == true ? "额外画布留白" : "画布留白",
+                                value: $draft.paddingPercent, range: 0...20)
+                    valueSlider(draft.templateLayout == true ? "增加底栏高度" : "底栏高度",
+                                value: $draft.footerPercent, range: 0...35)
+                    valueSlider(draft.templateLayout == true ? "增加照片圆角" : "照片圆角",
+                                value: $draft.cornerRadiusPercent, range: 0...10)
+                    Toggle("照片阴影", isOn: $draft.shadow)
                 }
-                ColorPicker("背景颜色", selection: Binding(
-                    get: { Color(nsColor: NSColor.watermarkHex(draft.backgroundHex) ?? .white) },
-                    set: { draft.backgroundHex = NSColor($0).watermarkHexString }
-                ))
-                valueSlider("画布留白", value: $draft.paddingPercent, range: 0...20)
-                valueSlider("底栏高度", value: $draft.footerPercent, range: 0...35)
-                valueSlider("照片圆角", value: $draft.cornerRadiusPercent, range: 0...10)
-                Toggle("照片阴影", isOn: $draft.shadow)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.top, 5)
@@ -119,9 +130,11 @@ struct WatermarkPresetEditorView: View {
                         Button(kind.rawValue) {
                             draft.components.append(WatermarkComponent(
                                 kind: kind,
-                                position: draft.footerPercent > 0 ? .footerLeft : .bottomLeft,
+                                position: draft.templateLayout == true || draft.footerPercent > 0
+                                    ? .footerLeft : .bottomLeft,
                                 text: kind == .customText ? "自定义文字" : "",
-                                colorHex: draft.footerPercent > 0 ? "#202020" : "#FFFFFF"
+                                colorHex: draft.templateLayout == true || draft.footerPercent > 0
+                                    ? "#202020" : "#FFFFFF"
                             ))
                         }
                     }
@@ -133,7 +146,7 @@ struct WatermarkPresetEditorView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.top, 5)
         } label: {
-            Text("文字组件")
+            Text("水印组件")
         }
     }
 
@@ -154,8 +167,27 @@ struct WatermarkPresetEditorView: View {
             Picker("内容", selection: component.kind) {
                 ForEach(WatermarkComponent.Kind.allCases) { kind in Text(kind.rawValue).tag(kind) }
             }
+            .onChange(of: component.wrappedValue.kind) { _, newKind in
+                if newKind != .logo, [.footerLogo, .centerLogo].contains(component.wrappedValue.slot) {
+                    component.wrappedValue.slot = nil
+                }
+            }
             if component.wrappedValue.kind == .customText {
                 TextField("显示文字", text: component.text)
+            }
+            if component.wrappedValue.kind == .logo {
+                HStack(spacing: 10) {
+                    if let data = component.wrappedValue.imageData, let image = NSImage(data: data) {
+                        Image(nsImage: image).resizable().scaledToFit().frame(width: 82, height: 42)
+                    } else {
+                        Text("自动匹配相机品牌 Logo").font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button("选择图片…") { chooseLogo(for: id) }
+                    if component.wrappedValue.imageData != nil {
+                        Button("恢复自动") { component.wrappedValue.imageData = nil }
+                    }
+                }
             }
             Picker("位置", selection: component.position) {
                 ForEach(WatermarkComponent.Position.allCases) { position in
@@ -163,17 +195,20 @@ struct WatermarkPresetEditorView: View {
                 }
             }
             HStack {
-                Text("字号")
-                Slider(value: component.fontPercent, in: 0.5...8, step: 0.1)
+                Text(component.wrappedValue.kind == .logo ? "大小" : "字号")
+                Slider(value: component.fontPercent,
+                       in: component.wrappedValue.kind == .logo ? 0.5...15 : 0.5...8, step: 0.1)
                 Text(String(format: "%.1f%%", component.wrappedValue.fontPercent))
                     .monospacedDigit().frame(width: 48)
             }
-            HStack {
-                ColorPicker("文字颜色", selection: Binding(
-                    get: { Color(nsColor: NSColor.watermarkHex(component.wrappedValue.colorHex) ?? .black) },
-                    set: { component.wrappedValue.colorHex = NSColor($0).watermarkHexString }
-                ))
-                Toggle("加粗", isOn: component.bold)
+            if component.wrappedValue.kind != .logo {
+                HStack {
+                    ColorPicker("文字颜色", selection: Binding(
+                        get: { Color(nsColor: NSColor.watermarkHex(component.wrappedValue.colorHex) ?? .black) },
+                        set: { component.wrappedValue.colorHex = NSColor($0).watermarkHexString }
+                    ))
+                    Toggle("加粗", isOn: component.bold)
+                }
             }
         }
         .padding(10)
@@ -218,6 +253,26 @@ struct WatermarkPresetEditorView: View {
         } catch {
             saveError = error.localizedDescription
         }
+    }
+
+    private func chooseLogo(for id: UUID) {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.png, .jpeg, .tiff, .heic, .webP]
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let url = panel.url,
+              let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceThumbnailMaxPixelSize: 1024
+              ] as CFDictionary),
+              let data = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]),
+              let index = draft.components.firstIndex(where: { $0.id == id }) else {
+            saveError = "无法读取所选 Logo 图片"
+            return
+        }
+        draft.components[index].imageData = data
     }
 
     private func loadPreview() async {

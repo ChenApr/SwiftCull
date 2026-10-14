@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import ImageIO
 
 struct WatermarkExportView: View {
     @ObservedObject var store: PhotoStore
@@ -39,6 +40,18 @@ struct WatermarkExportView: View {
         case .builtIn(let preset): return preset
         case .custom: return currentConfiguration?.basePreset ?? .standard
         }
+    }
+
+    private var presetForEditor: WatermarkPreset {
+        guard let currentItem, case .builtIn = currentItem.choice,
+              currentItem.matchOrientation,
+              let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: currentItem.sourcePath) as CFURL, nil),
+              let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceThumbnailMaxPixelSize: 128
+              ] as CFDictionary) else { return currentPreset }
+        return currentPreset.resolved(isPortrait: image.height > image.width, matchOrientation: true)
     }
 
     private var previewKey: String {
@@ -237,11 +250,11 @@ struct WatermarkExportView: View {
 
                     HStack {
                         Button("新建预设…") {
-                            editingConfiguration = WatermarkConfiguration.draft(from: currentPreset)
+                            editingConfiguration = WatermarkConfiguration.draft(from: presetForEditor)
                         }
                         Button("编辑预设…") {
                             editingConfiguration = currentConfiguration
-                                ?? WatermarkConfiguration.draft(from: currentPreset)
+                                ?? WatermarkConfiguration.draft(from: presetForEditor)
                         }
                     }
                     if currentConfiguration != nil {

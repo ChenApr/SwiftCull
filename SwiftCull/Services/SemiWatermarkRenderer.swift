@@ -6,7 +6,8 @@ import ImageIO
 /// the corresponding templates in semi-utils/config/templates (Apache-2.0).
 enum SemiWatermarkRenderer {
     static func render(photo: PhotoEntry, preset: WatermarkPreset, sourcePath: String?,
-                       matchOrientation: Bool, maxPixelSize: Int?) throws -> NSBitmapImageRep {
+                       matchOrientation: Bool, maxPixelSize: Int?,
+                       configuration: WatermarkConfiguration? = nil) throws -> NSBitmapImageRep {
         guard let path = sourcePath ?? photo.watermarkSourcePath(preferRaw: false),
               let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil) else {
             throw WatermarkError.unreadableImage
@@ -32,87 +33,131 @@ enum SemiWatermarkRenderer {
                                        matchOrientation: matchOrientation)
         switch selected.layout {
         case .standard, .card, .nikonCard, .centerBrand:
-            return try bordered(image, metadata: metadata, preset: selected)
+            return try bordered(image, metadata: metadata, preset: selected, configuration: configuration)
         case .blur, .nikonBlur:
-            return try blurred(image, metadata: metadata, nikon: selected.layout == .nikonBlur)
+            return try blurred(image, metadata: metadata, nikon: selected.layout == .nikonBlur,
+                               configuration: configuration)
         case .cornerParameters:
             return try overlay(image) { canvas in
                 let short = CGFloat(min(image.width, image.height))
                 let height = selected.isPortraitPreset ? short * 0.03 : CGFloat(image.height) * 0.03
                 let inset = CGFloat(image.height) * 0.05
-                draw(metadata.parameters, x: canvas.width - inset, bottom: inset,
-                     height: height, color: .white, weight: .bold, alignment: .right,
-                     maxWidth: canvas.width * 0.9)
+                drawSlot(.overlayParameters, defaultText: metadata.parameters,
+                         defaultPosition: .bottomRight, baselinePercent: 3,
+                         image: image, canvas: canvas, metadata: metadata, configuration: configuration,
+                         x: canvas.width - inset, bottom: inset, height: height,
+                         color: .white, weight: .bold, alignment: .right, maxWidth: canvas.width * 0.9)
+                drawExtras(configuration, metadata: metadata, image: image, canvas: canvas,
+                           photoRect: canvas, footer: 0)
             }
         case .folderAndDate:
             return try overlay(image) { canvas in
                 let short = CGFloat(min(image.width, image.height))
                 let height = selected.isPortraitPreset ? short * 0.03 : CGFloat(image.height) * 0.03
-                draw("\(metadata.folder)    \(metadata.date)", x: canvas.width * 0.93,
-                     bottom: canvas.height * 0.02, height: height,
-                     color: NSColor(calibratedRed: 232 / 255, green: 141 / 255,
-                                    blue: 52 / 255, alpha: 1), weight: .regular,
-                     alignment: .right, maxWidth: canvas.width * 0.85)
+                drawSlot(.overlayFolderDate, defaultText: "\(metadata.folder)    \(metadata.date)",
+                         defaultPosition: .bottomRight, baselinePercent: 3,
+                         image: image, canvas: canvas, metadata: metadata, configuration: configuration,
+                         x: canvas.width * 0.93, bottom: canvas.height * 0.02, height: height,
+                         color: NSColor(calibratedRed: 232 / 255, green: 141 / 255,
+                                        blue: 52 / 255, alpha: 1), weight: .regular,
+                         alignment: .right, maxWidth: canvas.width * 0.85)
+                drawExtras(configuration, metadata: metadata, image: image, canvas: canvas,
+                           photoRect: canvas, footer: 0)
             }
         }
     }
 
     private static func bordered(_ image: CGImage, metadata: Metadata,
-                                 preset: WatermarkPreset) throws -> NSBitmapImageRep {
+                                 preset: WatermarkPreset,
+                                 configuration: WatermarkConfiguration?) throws -> NSBitmapImageRep {
         let portrait = preset.isPortraitPreset
         let short = CGFloat(min(image.width, image.height))
         let imageHeight = CGFloat(image.height)
         let isCard = preset.layout == .card || preset.layout == .nikonCard
         let isLogoOnly = preset.layout == .centerBrand
-        let shadowRadius: CGFloat = isCard ? pixel(portrait ? short * 0.027 : 100) : 0
+        let shadowRadius: CGFloat = (isCard || configuration?.shadow == true) && (configuration?.shadow ?? true)
+            ? (isCard ? pixel(portrait ? short * 0.027 : 100) : pixel(short * 0.015)) : 0
         let shadowPadding = shadowRadius * 2
         let shadowHeight = imageHeight + shadowPadding * 2
-        let sideMargin: CGFloat = isCard ? (portrait && preset.layout == .card ? pixel(short * 0.027) : 100)
-            : (isLogoOnly ? pixel(portrait ? short * 0.02 : imageHeight * 0.02) : 0)
-        let topMargin: CGFloat = isCard ? sideMargin : 0
+        let extraPadding = short * CGFloat(configuration?.paddingPercent ?? 0) / 100
+        let sideMargin: CGFloat = (isCard ? (portrait && preset.layout == .card ? pixel(short * 0.027) : 100)
+            : (isLogoOnly ? pixel(portrait ? short * 0.02 : imageHeight * 0.02) : 0)) + extraPadding
+        let topMargin: CGFloat = (isCard ? sideMargin : 0) + (isCard ? 0 : extraPadding)
         let footer = pixel(portrait ? short * 0.13 : shadowHeight * 0.12)
+            + short * CGFloat(configuration?.footerPercent ?? 0) / 100
         let finalBottomMargin: CGFloat = isCard ? pixel((portrait ? short : imageHeight) * 0.02) : 0
         let canvasWidth = CGFloat(image.width) + shadowPadding * 2 + sideMargin * 2
         let canvasHeight = shadowHeight + topMargin + footer + finalBottomMargin
         let canvasSize = CGSize(width: Int(canvasWidth), height: Int(canvasHeight))
 
         return try bitmap(size: canvasSize) { canvas in
-            NSColor.white.setFill()
+            (configuration.flatMap { NSColor.watermarkHex($0.backgroundHex) } ?? .white).setFill()
             canvas.fill()
+            if configuration?.background == .blurred,
+               let background = softBackground(image, radius: short * 0.03) {
+                background.draw(in: canvas)
+            }
             let photoRect = CGRect(x: sideMargin + shadowPadding,
                                    y: finalBottomMargin + footer + shadowPadding,
                                    width: CGFloat(image.width), height: CGFloat(image.height))
-            let radius: CGFloat = isCard ? (portrait ? short * 0.01 : imageHeight * 0.01) : 0
+            let radius: CGFloat = (isCard ? (portrait ? short * 0.01 : imageHeight * 0.01) : 0)
+                + short * CGFloat(configuration?.cornerRadiusPercent ?? 0) / 100
             drawPhoto(image, in: photoRect, radius: radius,
                       shadowRadius: shadowRadius, shadowColor: .black)
 
-            guard let logo = logo(for: metadata.make) else {
+            let logoComponent = configuration?.components.first { $0.slot == (isLogoOnly ? .centerLogo : .footerLogo) }
+            let logo = logoComponent?.imageData.flatMap(NSImage.init(data:)) ?? logo(for: metadata.make)
+            guard let logo else {
                 drawFooterText(canvas: canvas, image: image, metadata: metadata,
                                portrait: portrait, card: isCard, logoRect: nil,
                                footer: footer, sideMargin: sideMargin,
-                               bottomMargin: finalBottomMargin, logoOnly: isLogoOnly)
+                               bottomMargin: finalBottomMargin, logoOnly: isLogoOnly,
+                               configuration: configuration, photoRect: photoRect)
+                drawExtras(configuration, metadata: metadata, image: image, canvas: canvas,
+                           photoRect: photoRect, footer: footer)
                 return
             }
             if isLogoOnly {
-                let height = portrait ? short * 0.09 : footer
-                let aspect = logo.size.width / max(logo.size.height, 1)
-                let rect = CGRect(x: canvas.midX - height * aspect / 2,
-                                  y: finalBottomMargin + (footer - height) / 2,
-                                  width: height * aspect, height: height)
-                logo.draw(in: rect)
+                if configuration == nil || logoComponent != nil {
+                    let height = (portrait ? short * 0.09 : footer)
+                        * CGFloat(logoComponent.map { $0.fontPercent / (portrait ? 9 : 12) } ?? 1)
+                    let aspect = logo.size.width / max(logo.size.height, 1)
+                    if logoComponent?.position == nil || logoComponent?.position == .footerCenter {
+                        let rect = CGRect(x: canvas.midX - height * aspect / 2,
+                                          y: finalBottomMargin + (footer - height) / 2,
+                                          width: height * aspect, height: height)
+                        logo.draw(in: rect)
+                    } else if var moved = logoComponent {
+                        moved.imageData = moved.imageData ?? logo.tiffRepresentation
+                        drawAtPosition("", component: moved, image: image, canvas: canvas,
+                                       photoRect: photoRect, height: height, color: .black, weight: .regular)
+                    }
+                }
             } else {
                 drawFooterText(canvas: canvas, image: image, metadata: metadata,
-                               portrait: portrait, card: isCard, logoRect: logo,
+                               portrait: portrait, card: isCard,
+                               logoRect: logoComponent?.position == .footerRight || configuration == nil ? logo : nil,
                                footer: footer, sideMargin: sideMargin,
-                               bottomMargin: finalBottomMargin, logoOnly: false)
+                               bottomMargin: finalBottomMargin, logoOnly: false,
+                               configuration: configuration, photoRect: photoRect)
+                if let logoComponent, logoComponent.position != .footerRight {
+                    var moved = logoComponent
+                    moved.imageData = moved.imageData ?? logo.tiffRepresentation
+                    let size = footer * CGFloat(moved.fontPercent / (portrait ? 6.8 : 7.2))
+                    drawAtPosition("", component: moved, image: image, canvas: canvas,
+                                   photoRect: photoRect, height: size, color: .black, weight: .regular)
+                }
             }
+            drawExtras(configuration, metadata: metadata, image: image, canvas: canvas,
+                       photoRect: photoRect, footer: footer)
         }
     }
 
     private static func drawFooterText(canvas: CGRect, image: CGImage, metadata: Metadata,
                                        portrait: Bool, card: Bool, logoRect logo: NSImage?,
                                        footer: CGFloat, sideMargin: CGFloat,
-                                       bottomMargin: CGFloat, logoOnly: Bool) {
+                                       bottomMargin: CGFloat, logoOnly: Bool,
+                                       configuration: WatermarkConfiguration?, photoRect: CGRect) {
         guard !logoOnly else { return }
         let short = CGFloat(min(image.width, image.height))
         let line = portrait ? short * 0.03 : footer * 0.3
@@ -127,12 +172,18 @@ enum SemiWatermarkRenderer {
         let lowerBottom = bottomMargin + elementMargin
         let upperBottom = lowerBottom + line + gap
 
-        draw(metadata.camera, x: leftX, bottom: upperBottom, height: boldLine * fontScale,
-             color: .black, weight: .bold, alignment: .left,
-             maxWidth: canvas.width * 0.44)
-        draw(metadata.lens, x: leftX, bottom: lowerBottom, height: line * fontScale,
-             color: darkText, weight: .light, alignment: .left,
-             maxWidth: canvas.width * 0.44)
+        drawSlot(.footerCamera, defaultText: metadata.camera, defaultPosition: .footerLeft,
+                 baselinePercent: portrait ? 1.9323 : 3.051, image: image, canvas: canvas,
+                 metadata: metadata, configuration: configuration,
+                 x: leftX, bottom: upperBottom, height: boldLine * fontScale,
+                 color: .black, weight: .bold, alignment: .left, maxWidth: canvas.width * 0.44,
+                 photoRect: photoRect)
+        drawSlot(.footerLens, defaultText: metadata.lens, defaultPosition: .footerLeft,
+                 baselinePercent: portrait ? 1.71 : 2.7, image: image, canvas: canvas,
+                 metadata: metadata, configuration: configuration,
+                 x: leftX, bottom: lowerBottom, height: line * fontScale,
+                 color: darkText, weight: .light, alignment: .left, maxWidth: canvas.width * 0.44,
+                 photoRect: photoRect)
 
         let rightFont = font(size: boldLine * fontScale, weight: .bold)
         let rightBottomFont = font(size: line * fontScale, weight: .light)
@@ -141,14 +192,20 @@ enum SemiWatermarkRenderer {
         let rightStart = rightEnd - rightWidth
         let rightAlignment: NSTextAlignment = (!card && !portrait) ? .left : .right
         let rightAnchor = rightAlignment == .left ? rightStart : rightEnd
-        draw(metadata.parameters, x: rightAnchor, bottom: upperBottom, height: boldLine * fontScale,
-             color: darkText, weight: .bold, alignment: rightAlignment,
-             maxWidth: canvas.width * 0.44)
-        draw(metadata.date, x: rightAnchor, bottom: lowerBottom, height: line * fontScale,
-             color: darkText, weight: .light, alignment: rightAlignment,
-             maxWidth: canvas.width * 0.44)
+        drawSlot(.footerParameters, defaultText: metadata.parameters, defaultPosition: .footerRight,
+                 baselinePercent: portrait ? 1.9323 : 3.051, image: image, canvas: canvas,
+                 metadata: metadata, configuration: configuration,
+                 x: rightAnchor, bottom: upperBottom, height: boldLine * fontScale,
+                 color: darkText, weight: .bold, alignment: rightAlignment,
+                 maxWidth: canvas.width * 0.44, photoRect: photoRect)
+        drawSlot(.footerDate, defaultText: metadata.date, defaultPosition: .footerRight,
+                 baselinePercent: portrait ? 1.71 : 2.7, image: image, canvas: canvas,
+                 metadata: metadata, configuration: configuration,
+                 x: rightAnchor, bottom: lowerBottom, height: line * fontScale,
+                 color: darkText, weight: .light, alignment: rightAlignment,
+                 maxWidth: canvas.width * 0.44, photoRect: photoRect)
 
-        if let logo {
+        if let logo, configuration == nil || configuration?.components.contains(where: { $0.slot == .footerLogo }) == true {
             let delimiterWidth = max(1, CGFloat(image.width) * 0.003)
             let delimiterX = canvas.width - sideMargin - rightWidth
                 - 2 * commonSpacing - delimiterWidth
@@ -158,7 +215,8 @@ enum SemiWatermarkRenderer {
                 CGRect(x: delimiterX, y: bottomMargin + elementMargin - elementHeight * 0.05,
                        width: delimiterWidth, height: elementHeight * 1.1).fill()
             }
-            let logoSize = elementHeight
+            let logoSize = elementHeight * CGFloat(configuration?.components.first(where: { $0.slot == .footerLogo })
+                .map { $0.fontPercent / (portrait ? 6.8 : 7.2) } ?? 1)
             let rect = CGRect(x: delimiterX - commonSpacing - logoSize,
                               y: bottomMargin + elementMargin,
                               width: logoSize, height: logoSize)
@@ -167,14 +225,15 @@ enum SemiWatermarkRenderer {
     }
 
     private static func blurred(_ image: CGImage, metadata: Metadata,
-                                nikon: Bool) throws -> NSBitmapImageRep {
+                                nikon: Bool, configuration: WatermarkConfiguration?) throws -> NSBitmapImageRep {
         let width = CGFloat(image.width)
         let height = CGFloat(image.height)
         let short = min(width, height)
-        let canvasSize = CGSize(width: Int(width * 1.35), height: Int(height * 1.35))
+        let canvasSize = CGSize(width: Int(width * 1.35 + short * CGFloat(configuration?.paddingPercent ?? 0) * 2 / 100),
+                                height: Int(height * 1.35 + short * CGFloat(configuration?.footerPercent ?? 0) / 100))
         let blurRadius = short * 0.03
-        let roundedRadius = short * 0.02
-        let shadowRadius = short * 0.01
+        let roundedRadius = short * (0.02 + CGFloat(configuration?.cornerRadiusPercent ?? 0) / 100)
+        let shadowRadius = (configuration?.shadow ?? true) ? short * 0.01 : 0
         let shadowPadding = shadowRadius * 2
         let cameraHeight = short * 0.04
         let parameterHeight = short * 0.03
@@ -189,7 +248,10 @@ enum SemiWatermarkRenderer {
         let photoOffset = short * (nikon ? 0.0024 : -0.0051)
 
         return try bitmap(size: canvasSize) { canvas in
-            if let background = softBackground(image, radius: blurRadius) {
+            if configuration?.background == .solid {
+                (configuration.flatMap { NSColor.watermarkHex($0.backgroundHex) } ?? .white).setFill()
+                canvas.fill()
+            } else if let background = softBackground(image, radius: blurRadius) {
                 background.draw(in: CGRect(x: (canvas.width - width * 2) / 2,
                                            y: (canvas.height - height * 2) / 2,
                                            width: width * 2, height: height * 2))
@@ -203,20 +265,45 @@ enum SemiWatermarkRenderer {
             let textCenter = canvas.midX
             let parameterBottom = bottom + shadowPadding - parameterOffset
             let cameraBottom = bottom + shadowPadding + parameterHeight + spacing - cameraOffset
-            if nikon, let range = metadata.camera.range(of: "Z") {
+            if nikon, configuration == nil, let range = metadata.camera.range(of: "Z") {
                 let before = String(metadata.camera[..<range.lowerBound])
                 let after = String(metadata.camera[range.upperBound...])
                 drawRichCamera(before: before, after: after, x: textCenter,
                                bottom: cameraBottom, height: cameraHeight * 1.5,
                                maxWidth: canvas.width * 0.85)
+            } else if nikon, let component = configuration?.components.first(where: { $0.slot == .blurCamera }),
+                      component.kind == .camera, component.text.isEmpty || component.text == "文字",
+                      component.colorHex == "#FFFFFF", component.bold,
+                      component.position == .bottomCenter {
+                if let range = metadata.camera.range(of: "Z") {
+                    drawRichCamera(before: String(metadata.camera[..<range.lowerBound]),
+                                   after: String(metadata.camera[range.upperBound...]), x: textCenter,
+                                   bottom: cameraBottom, height: cameraHeight * 1.5
+                                       * CGFloat(component.fontPercent / 4), maxWidth: canvas.width * 0.85)
+                } else {
+                    drawSlot(.blurCamera, defaultText: metadata.camera, defaultPosition: .bottomCenter,
+                             baselinePercent: 4, image: image, canvas: canvas, metadata: metadata,
+                             configuration: configuration, x: textCenter, bottom: cameraBottom,
+                             height: cameraHeight, color: .white, weight: .bold,
+                             alignment: .center, maxWidth: canvas.width * 0.85,
+                             photoRect: photoRect)
+                }
             } else {
-                draw(metadata.camera, x: textCenter, bottom: cameraBottom,
-                     height: cameraHeight, color: .white, weight: .bold,
-                     alignment: .center, maxWidth: canvas.width * 0.85)
+                drawSlot(.blurCamera, defaultText: metadata.camera, defaultPosition: .bottomCenter,
+                         baselinePercent: 4, image: image, canvas: canvas, metadata: metadata,
+                         configuration: configuration, x: textCenter, bottom: cameraBottom,
+                         height: cameraHeight, color: .white, weight: .bold,
+                         alignment: .center, maxWidth: canvas.width * 0.85,
+                         photoRect: photoRect)
             }
-            draw(metadata.parameters, x: textCenter, bottom: parameterBottom,
-                 height: short * 0.037, color: .white, weight: .light,
-                 alignment: .center, maxWidth: canvas.width * 0.85)
+            drawSlot(.blurParameters, defaultText: metadata.parameters, defaultPosition: .bottomCenter,
+                     baselinePercent: 3.7, image: image, canvas: canvas, metadata: metadata,
+                     configuration: configuration, x: textCenter, bottom: parameterBottom,
+                     height: short * 0.037, color: .white, weight: .light,
+                     alignment: .center, maxWidth: canvas.width * 0.85,
+                     photoRect: photoRect)
+            drawExtras(configuration, metadata: metadata, image: image, canvas: canvas,
+                       photoRect: photoRect, footer: canvas.height - photoRect.minY)
         }
     }
 
@@ -309,6 +396,98 @@ enum SemiWatermarkRenderer {
 
     private static let darkText = NSColor(calibratedWhite: 0.14, alpha: 1)
 
+    private static func text(for component: WatermarkComponent, metadata: Metadata) -> String {
+        switch component.kind {
+        case .camera: return metadata.camera
+        case .lens: return metadata.lens
+        case .parameters: return metadata.parameters
+        case .date: return metadata.date
+        case .folder: return metadata.folder
+        case .folderAndDate: return "\(metadata.folder)    \(metadata.date)"
+        case .customText: return component.text
+        case .logo: return ""
+        }
+    }
+
+    private static func drawSlot(_ slot: WatermarkComponent.Slot, defaultText: String,
+                                 defaultPosition: WatermarkComponent.Position, baselinePercent: Double,
+                                 image: CGImage, canvas: CGRect, metadata: Metadata,
+                                 configuration: WatermarkConfiguration?, x: CGFloat, bottom: CGFloat,
+                                 height: CGFloat, color: NSColor, weight: NSFont.Weight,
+                                 alignment: NSTextAlignment, maxWidth: CGFloat,
+                                 photoRect: CGRect? = nil) {
+        guard let configuration else {
+            draw(defaultText, x: x, bottom: bottom, height: height, color: color,
+                 weight: weight, alignment: alignment, maxWidth: maxWidth)
+            return
+        }
+        guard let component = configuration.components.first(where: { $0.slot == slot }) else { return }
+        let text = text(for: component, metadata: metadata)
+        let scaledHeight = height * CGFloat(component.fontPercent / baselinePercent)
+        let defaultHex: String = slot == .footerCamera ? "#000000"
+            : (slot == .overlayFolderDate ? "#E88D34" :
+                ([.blurCamera, .blurParameters, .overlayParameters].contains(slot) ? "#FFFFFF" : "#242424"))
+        let chosenColor = component.colorHex == defaultHex ? color :
+            (NSColor.watermarkHex(component.colorHex) ?? color)
+        let chosenWeight: NSFont.Weight = component.bold ? .bold : (weight == .bold ? .regular : weight)
+        if component.position == defaultPosition {
+            draw(text, x: x, bottom: bottom, height: scaledHeight, color: chosenColor,
+                 weight: chosenWeight, alignment: alignment, maxWidth: maxWidth)
+        } else {
+            drawAtPosition(text, component: component, image: image, canvas: canvas,
+                           photoRect: photoRect ?? CGRect(x: 0, y: max(0, canvas.height - CGFloat(image.height)),
+                                                          width: CGFloat(image.width), height: CGFloat(image.height)),
+                           height: scaledHeight, color: chosenColor, weight: chosenWeight)
+        }
+    }
+
+    private static func drawAtPosition(_ text: String, component: WatermarkComponent,
+                                       image: CGImage, canvas: CGRect, photoRect: CGRect,
+                                       height: CGFloat, color: NSColor, weight: NSFont.Weight) {
+        let position = component.position
+        let inset = CGFloat(min(image.width, image.height)) * 0.025
+        let left = [.topLeft, .bottomLeft, .footerLeft].contains(position)
+        let right = [.topRight, .bottomRight, .footerRight].contains(position)
+        let x = left ? photoRect.minX + inset : (right ? photoRect.maxX - inset : photoRect.midX)
+        let bottom: CGFloat
+        if position.isFooter { bottom = max(0, photoRect.minY / 2) }
+        else if [.topLeft, .topCenter, .topRight].contains(position) {
+            bottom = photoRect.maxY - inset - height * 1.3
+        } else { bottom = photoRect.minY + inset }
+        let alignment: NSTextAlignment = left ? .left : (right ? .right : .center)
+        if component.kind == .logo {
+            let logo = component.imageData.flatMap(NSImage.init(data:))
+            if let logo {
+                let width = min(photoRect.width * 0.4, height * logo.size.width / max(logo.size.height, 1))
+                let origin = left ? x : (right ? x - width : x - width / 2)
+                logo.draw(in: CGRect(x: origin, y: bottom, width: width, height: height))
+            }
+        } else {
+            draw(text, x: x, bottom: bottom, height: height, color: color,
+                 weight: weight, alignment: alignment, maxWidth: photoRect.width * 0.85)
+        }
+    }
+
+    private static func drawExtras(_ configuration: WatermarkConfiguration?, metadata: Metadata,
+                                   image: CGImage, canvas: CGRect, photoRect: CGRect, footer: CGFloat) {
+        guard let configuration else { return }
+        for component in configuration.components where component.slot == nil {
+            if component.position.isFooter && footer <= 0 { continue }
+            let height = CGFloat(min(image.width, image.height)) * CGFloat(component.fontPercent / 100)
+            let color = NSColor.watermarkHex(component.colorHex) ?? .black
+            if component.kind == .logo, component.imageData == nil {
+                var resolved = component
+                resolved.imageData = logo(for: metadata.make)?.tiffRepresentation
+                drawAtPosition("", component: resolved, image: image, canvas: canvas,
+                               photoRect: photoRect, height: height, color: color, weight: .regular)
+            } else {
+                drawAtPosition(text(for: component, metadata: metadata), component: component,
+                               image: image, canvas: canvas, photoRect: photoRect,
+                               height: height, color: color, weight: component.bold ? .bold : .regular)
+            }
+        }
+    }
+
     private static func font(size: CGFloat, weight: NSFont.Weight) -> NSFont {
         NSFont.systemFont(ofSize: max(7, size), weight: weight)
     }
@@ -353,7 +532,7 @@ enum SemiWatermarkRenderer {
         }
     }
 
-    private static func logo(for make: String) -> NSImage? {
+    static func logo(for make: String) -> NSImage? {
         let known = ["nikon", "canon", "fujifilm", "sony", "leica_logo", "hasselblad",
                      "panasonic", "pentax", "ricoh", "olympus_blue_gold", "apple", "DJI", "xmage"]
         guard let name = known.first(where: {

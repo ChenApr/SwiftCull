@@ -35,7 +35,8 @@ final class WatermarkPresetStore: ObservableObject {
               (0...35).contains(validated.footerPercent),
               (0...10).contains(validated.cornerRadiusPercent),
               validated.components.count <= 32,
-              validated.components.allSatisfy({ (0.5...8).contains($0.fontPercent) }) else {
+              validated.components.allSatisfy({ (0.5...15).contains($0.fontPercent)
+                  && ($0.imageData?.count ?? 0) <= 5_000_000 }) else {
             throw PresetError.invalidValue
         }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

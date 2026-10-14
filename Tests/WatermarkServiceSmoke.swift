@@ -60,9 +60,36 @@ struct WatermarkServiceSmoke {
                     }
                 }
                 precondition(hasYellowLogo, "Bundled Nikon logo was not rendered")
+                for preset in [WatermarkPreset.standard, .nikonPortrait, .centerBrand] {
+                    let builtIn = try WatermarkService.render(photo: photo, preset: preset,
+                                                              sourcePath: nikonInput.path)
+                    let editor = try WatermarkCustomRenderer.render(
+                        photo: photo, configuration: .draft(from: preset), sourcePath: nikonInput.path)
+                    precondition(editor.tiffRepresentation == builtIn.tiffRepresentation,
+                                 "Nikon editor rendering differs from \(preset.rawValue)")
+                }
+                var uploaded = WatermarkConfiguration.draft(from: .centerBrand)
+                precondition(uploaded.components.count == 1 && uploaded.components[0].kind == .logo)
+                uploaded.components[0].imageData = bitmap.representation(using: .png, properties: [:])
+                let changed = try WatermarkCustomRenderer.render(photo: photo, configuration: uploaded,
+                                                                 sourcePath: nikonInput.path)
+                let originalBrand = try WatermarkService.render(photo: photo, preset: .centerBrand,
+                                                                sourcePath: nikonInput.path)
+                precondition(changed.tiffRepresentation != originalBrand.tiffRepresentation,
+                             "Uploaded Logo was not rendered")
+                let encoded = try JSONEncoder().encode(uploaded)
+                let decoded = try JSONDecoder().decode(WatermarkConfiguration.self, from: encoded)
+                precondition(decoded.components[0].imageData == uploaded.components[0].imageData,
+                             "Uploaded Logo was not persisted")
             }
             for preset in WatermarkPreset.allCases {
                 let image = try WatermarkService.render(photo: photo, preset: preset)
+                let draft = WatermarkConfiguration.draft(from: preset)
+                let editorImage = try WatermarkCustomRenderer.render(photo: photo, configuration: draft)
+                precondition(editorImage.pixelsWide == image.pixelsWide && editorImage.pixelsHigh == image.pixelsHigh,
+                             "Editor canvas differs from \(preset.rawValue)")
+                precondition(editorImage.tiffRepresentation == image.tiffRepresentation,
+                             "Initial editor rendering differs from \(preset.rawValue)")
                 let preview = try WatermarkService.previewData(photo: photo, preset: preset)
                 let exported = try WatermarkService.jpegData(photo: photo, preset: preset)
                 let exportedSource = CGImageSourceCreateWithData(exported as CFData, nil)!
@@ -109,7 +136,7 @@ struct WatermarkServiceSmoke {
                                                          text: "SwiftCull", colorHex: "#FFFFFF", bold: true))
             let customImage = try WatermarkCustomRenderer.render(photo: photo, configuration: custom)
             let customPreview = try WatermarkService.previewData(photo: photo, configuration: custom)
-            precondition(customImage.pixelsWide > width && customImage.pixelsHigh > height)
+            precondition(customImage.pixelsWide == width && customImage.pixelsHigh > height)
             precondition(!customPreview.isEmpty)
             if width > height, let previewPath = ProcessInfo.processInfo.environment["SWIFTCULL_SMOKE_PREVIEW"] {
                 try customPreview.write(to: URL(fileURLWithPath: previewPath))
@@ -156,9 +183,29 @@ struct WatermarkServiceSmoke {
             config.components.append(WatermarkComponent(kind: .customText, position: .footerCenter,
                                                          text: "新组件"))
             try reopened.save(config)
-            precondition(reopened.configurations.first?.components.count == 5)
+            precondition(reopened.configurations.first?.components.count == 6)
             try reopened.delete(config.id)
             precondition(reopened.configurations.isEmpty)
+        }
+        let old = WatermarkConfiguration(name: "旧预设", basePreset: .standard, components: [])
+        let oldData = try JSONEncoder().encode(old)
+        let decodedOld = try JSONDecoder().decode(WatermarkConfiguration.self, from: oldData)
+        precondition(decodedOld.templateLayout == nil && decodedOld.components.isEmpty,
+                     "Existing custom presets must remain readable")
+        if let path = ProcessInfo.processInfo.environment["SWIFTCULL_SEMI_SAMPLE"] {
+            let sample = PhotoEntry(baseName: "sample", jpgPath: path, nefPath: nil, movPath: nil,
+                                    jpgFileSize: 0, nefFileSize: nil, movFileSize: nil,
+                                    fileDate: Date(), modificationDate: Date())
+            for preset in WatermarkPreset.allCases {
+                let builtIn = try SemiWatermarkRenderer.render(photo: sample, preset: preset,
+                                                               sourcePath: path, matchOrientation: false,
+                                                               maxPixelSize: 1200)
+                let editing = try WatermarkCustomRenderer.render(photo: sample,
+                                                                  configuration: .draft(from: preset),
+                                                                  sourcePath: path, maxPixelSize: 1200)
+                precondition(editing.tiffRepresentation == builtIn.tiffRepresentation,
+                             "Real photo editor rendering differs from \(preset.rawValue)")
+            }
         }
         print("Watermark smoke test passed: 15 presets × landscape/portrait, Nikon logo, custom layout, persistence, JPEG export")
     }
