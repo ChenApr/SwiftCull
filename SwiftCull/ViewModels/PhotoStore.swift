@@ -266,30 +266,9 @@ class PhotoStore: ObservableObject {
     func copyOriginalFiles(clicked photo: PhotoEntry? = nil, useSelection: Bool = true) -> Bool {
         let targets = contextPhotos(clicked: photo, useSelection: useSelection)
         guard !targets.isEmpty else { return false }
-        if targets.allSatisfy({ $0.cropRect == nil && !$0.isVersionCopy }) {
-            let paths = targets.flatMap { [$0.jpgPath, $0.nefPath, $0.movPath].compactMap { $0 } }
-            let urls = paths.filter { FileManager.default.fileExists(atPath: $0) }
-                .map { URL(fileURLWithPath: $0) as NSURL }
-            guard !urls.isEmpty else { return false }
-            NSPasteboard.general.clearContents()
-            return NSPasteboard.general.writeObjects(urls)
-        }
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("SwiftCull-CropClipboard-\(UUID().uuidString)", isDirectory: true)
         do {
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            var urls: [NSURL] = []
-            for entry in targets {
-                for path in [entry.jpgPath, entry.nefPath, entry.movPath].compactMap({ $0 }) {
-                    let output = path == entry.movPath
-                        ? try CropImageService.copyOrRender(photo: entry.asVersion(CropVersion(id: nil, name: nil, crop: nil)),
-                                                            sourcePath: path, into: directory)
-                        : try CropImageService.copyOrRender(photo: entry, sourcePath: path, into: directory)
-                    urls.append(output as NSURL)
-                }
-            }
-            NSPasteboard.general.clearContents()
-            return NSPasteboard.general.writeObjects(urls)
+            _ = try CropClipboardService.copy(targets)
+            return true
         } catch {
             exportMessage = "复制裁剪照片失败：\(error.localizedDescription)"
             return false

@@ -93,6 +93,10 @@ enum CropSmoke {
         let untouchedData = try Data(contentsOf: untouched)
         precondition(originalData == untouchedData)
 
+        let originalFiles = try CropClipboardService.prepare([unedited],
+            stagingRoot: root.appendingPathComponent("clipboard"))
+        precondition(originalFiles.urls == [original] && originalFiles.stagingDirectory == nil)
+
         let rotatedURL = root.appendingPathComponent("rotated.jpg")
         guard let rotatedDestination = CGImageDestinationCreateWithURL(rotatedURL as CFURL,
                                                                        UTType.jpeg.identifier as CFString, 1, nil) else {
@@ -126,6 +130,34 @@ enum CropSmoke {
         let renderedRaw = try CropImageService.image(path: rawOutput.path)
         precondition(renderedRaw.width == 50 && renderedRaw.height == 80)
 
+        let movie = root.appendingPathComponent("test-source.mov")
+        let movieData = Data("synthetic movie fixture".utf8)
+        try movieData.write(to: movie)
+        var pairedWithMovie = PhotoEntry(baseName: "test-source", jpgPath: original.path,
+                                         nefPath: rawSource.path, movPath: movie.path,
+                                         jpgFileSize: nil, nefFileSize: nil, movFileSize: nil,
+                                         fileDate: now, modificationDate: now)
+        pairedWithMovie.cropRect = crop
+        let preparedClipboard = try CropClipboardService.prepare([pairedWithMovie],
+            stagingRoot: root.appendingPathComponent("clipboard"))
+        let clipboardURLs = preparedClipboard.urls
+        precondition(clipboardURLs.map(\.pathExtension) == ["jpg", "tiff", "mov"])
+        precondition(preparedClipboard.stagingDirectory != nil)
+        let pasteDestination = root.appendingPathComponent("finder-paste")
+        try FileManager.default.createDirectory(at: pasteDestination, withIntermediateDirectories: true)
+        for url in clipboardURLs {
+            try FileManager.default.copyItem(at: url,
+                to: pasteDestination.appendingPathComponent(url.lastPathComponent))
+        }
+        let pastedMovieData = try Data(contentsOf: pasteDestination.appendingPathComponent(movie.lastPathComponent))
+        precondition(pastedMovieData == movieData)
+        let pastedJPG = try CropImageService.image(path: pasteDestination.appendingPathComponent("test.jpg").path)
+        precondition(pastedJPG.width == 50 && pastedJPG.height == 80)
+        let pastedTIFF = try CropImageService.image(path: pasteDestination.appendingPathComponent("test-source.tiff").path)
+        precondition(pastedTIFF.width == 50 && pastedTIFF.height == 80)
+        let originalAfterPaste = try Data(contentsOf: original)
+        precondition(originalAfterPaste == originalData)
+
         let copy = photo.asVersion(CropVersion(id: UUID(), name: "右侧", crop: crop))
         let copyOutput = try CropImageService.write(photo: copy, sourcePath: original.path,
                                                     into: root.appendingPathComponent("out"))
@@ -139,6 +171,6 @@ enum CropSmoke {
         let legacy = "{\"id\":null,\"name\":null,\"crop\":null}".data(using: .utf8)!
         let oldVersion = try JSONDecoder().decode(CropVersion.self, from: legacy)
         precondition(oldVersion.aspect == nil)
-        print("Crop smoke passed: ratios, image geometry, orientation, JPEG/TIFF output, original copy, version naming, persistence")
+        print("Crop smoke passed: ratios, gestures, image geometry, orientation, JPEG/TIFF output, clipboard staging, version naming, persistence")
     }
 }

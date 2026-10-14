@@ -126,3 +126,89 @@ enum CropImageService {
         return String(cleaned.prefix(60))
     }
 }
+
+enum CropClipboardError: LocalizedError {
+    case noFiles
+    case pasteboardWriteFailed
+
+    var errorDescription: String? {
+        switch self {
+        case .noFiles: return "所选照片的源文件不存在"
+        case .pasteboardWriteFailed: return "无法将照片文件复制到剪贴板"
+        }
+    }
+}
+
+/// Finder pastes file URLs, so edited versions first need durable, rendered files.
+enum CropClipboardService {
+    struct PreparedFiles {
+        let urls: [URL]
+        let stagingDirectory: URL?
+    }
+
+    static func prepare(_ photos: [PhotoEntry], stagingRoot: URL? = nil) throws -> PreparedFiles {
+        let fileManager = FileManager.default
+        let sources = photos.flatMap { photo in
+            [photo.jpgPath, photo.nefPath, photo.movPath].compactMap { path in
+                path.map { (photo, $0) }
+            }
+        }
+        guard !sources.isEmpty, sources.allSatisfy({ fileManager.fileExists(atPath: $0.1) }) else {
+            throw CropClipboardError.noFiles
+        }
+
+        let needsStaging = photos.contains { $0.cropRect != nil || $0.isVersionCopy }
+        var directory: URL?
+        let urls: [URL]
+        if needsStaging {
+            let root = stagingRoot ?? (fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first
+                ?? fileManager.temporaryDirectory).appendingPathComponent("SwiftCull/Clipboard", isDirectory: true)
+            let folder = root.appendingPathComponent(UUID().uuidString, isDirectory: true)
+            try fileManager.createDirectory(at: folder, withIntermediateDirectories: true)
+            directory = folder
+            do {
+                urls = try sources.map { photo, path in
+                    if path == photo.movPath {
+                        let uncut = photo.asVersion(CropVersion(id: nil, name: nil, crop: nil))
+                        return try CropImageService.copyOrRender(photo: uncut, sourcePath: path, into: folder)
+                    }
+                    return try CropImageService.copyOrRender(photo: photo, sourcePath: path, into: folder)
+                }
+            } catch {
+                try? fileManager.removeItem(at: folder)
+                throw error
+            }
+        } else {
+            urls = sources.map { URL(fileURLWithPath: $0.1) }
+        }
+
+        return PreparedFiles(urls: urls, stagingDirectory: directory)
+    }
+
+    static func copy(_ photos: [PhotoEntry], to pasteboard: NSPasteboard = .general,
+                     stagingRoot: URL? = nil) throws -> [URL] {
+        let prepared = try prepare(photos, stagingRoot: stagingRoot)
+        pasteboard.clearContents()
+        guard pasteboard.writeObjects(prepared.urls.map { $0 as NSURL }) else {
+            if let directory = prepared.stagingDirectory { try? FileManager.default.removeItem(at: directory) }
+            throw CropClipboardError.pasteboardWriteFailed
+        }
+        if let directory = prepared.stagingDirectory {
+            removeOldStagingFolders(in: directory.deletingLastPathComponent(), keeping: directory)
+        }
+        return prepared.urls
+    }
+
+    private static func removeOldStagingFolders(in root: URL, keeping current: URL) {
+        let fileManager = FileManager.default
+        let cutoff = Date().addingTimeInterval(-7 * 24 * 60 * 60)
+        let folders = (try? fileManager.contentsOfDirectory(at: root,
+            includingPropertiesForKeys: [.creationDateKey, .isDirectoryKey], options: .skipsHiddenFiles)) ?? []
+        for folder in folders where folder != current {
+            guard let values = try? folder.resourceValues(forKeys: [.creationDateKey, .isDirectoryKey]),
+                  values.isDirectory == true, let created = values.creationDate,
+                  created < cutoff else { continue }
+            try? fileManager.removeItem(at: folder)
+        }
+    }
+}
