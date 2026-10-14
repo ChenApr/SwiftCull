@@ -12,22 +12,8 @@ enum SemiWatermarkRenderer {
               let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil) else {
             throw WatermarkError.unreadableImage
         }
-        var options: [CFString: Any] = [
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceCreateThumbnailWithTransform: true
-        ]
-        if let maxPixelSize {
-            options[kCGImageSourceThumbnailMaxPixelSize] = maxPixelSize
-        } else {
-            let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
-            let width = properties?[kCGImagePropertyPixelWidth] as? Int ?? 0
-            let height = properties?[kCGImagePropertyPixelHeight] as? Int ?? 0
-            options[kCGImageSourceThumbnailMaxPixelSize] = max(width, height)
-        }
-        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
-                ?? CGImageSourceCreateImageAtIndex(source, 0, nil) else {
-            throw WatermarkError.unreadableImage
-        }
+        let image = try CropImageService.image(path: path, crop: photo.cropRect,
+                                               maxPixelSize: maxPixelSize)
         let metadata = Metadata(path: path, source: source, fallbackDate: photo.fileDate)
         let selected = preset.resolved(isPortrait: image.height > image.width,
                                        matchOrientation: matchOrientation)

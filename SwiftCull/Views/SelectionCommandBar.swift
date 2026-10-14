@@ -96,26 +96,38 @@ struct ShortcutHintBar: View {
 
     private var hints: [ShortcutHintItem] {
         if store.viewMode == .single {
-            return [
+            var items = [
                 ShortcutHintItem(keys: ["E"], label: "退出大图浏览"),
                 ShortcutHintItem(keys: ["Space"], label: "快速预览"),
                 ShortcutHintItem(keys: ["←", "→"], label: "上一张 / 下一张")
             ]
+            if store.canEditSelectedCrop {
+                items.insert(ShortcutHintItem(keys: ["C"], label: "裁剪"), at: 1)
+            }
+            return items
         }
         if store.isSelectMode {
-            return [
+            var items = [
                 ShortcutHintItem(keys: ["Q"], label: "完成并退出"),
                 ShortcutHintItem(keys: ["Esc"], label: "取消"),
                 ShortcutHintItem(keys: ["1–5"], label: "评分"),
                 ShortcutHintItem(keys: ["⌫"], label: "删除")
             ]
+            if store.canEditSelectedCrop {
+                items.insert(ShortcutHintItem(keys: ["C"], label: "裁剪"), at: 2)
+            }
+            return items
         } else if store.selectedPhoto != nil {
-            return [
+            var items = [
                 ShortcutHintItem(keys: ["E"], label: "大图浏览"),
                 ShortcutHintItem(keys: ["Space"], label: "快速预览"),
                 ShortcutHintItem(keys: ["↑", "↓", "←", "→"], label: "切换"),
                 ShortcutHintItem(keys: ["拖拽"], label: "框选多张")
             ]
+            if store.canEditSelectedCrop {
+                items.insert(ShortcutHintItem(keys: ["C"], label: "裁剪"), at: 1)
+            }
+            return items
         } else {
             return [
                 ShortcutHintItem(keys: ["拖拽"], label: "框选多张"),
