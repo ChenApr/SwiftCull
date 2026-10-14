@@ -125,21 +125,50 @@ struct PhotoGridView: View {
     }
 
     private var gridToolbar: some View {
-        HStack(spacing: 12) {
-            normalToolbar
+        GeometryReader { geometry in
+            toolbarLayout(for: geometry.size.width)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        }
+        .frame(height: 26)
+    }
 
-            Spacer(minLength: 24)
-
+    @ViewBuilder
+    private func toolbarLayout(for width: CGFloat) -> some View {
+        if width >= 650 {
             HStack(spacing: 12) {
-                Slider(value: $gridSize, in: minGridSize...maxGridSize)
-                    .frame(width: 150)
-                    .help("缩略图 \(Int(gridSize))px")
-
-                Image(systemName: "square.grid.2x2")
-                    .foregroundStyle(.secondary)
-                    .frame(width: 24, height: 24)
+                normalToolbar
+                Spacer(minLength: 24)
+                gridSizeControl(width: 150)
             }
-            .padding(.trailing, 8)
+        } else if width >= 500 {
+            HStack(spacing: 8) {
+                Text("\(store.photoCount) 张")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: true, vertical: false)
+                selectionMenu
+                groupingPicker(width: 120)
+                    .labelsHidden()
+                Spacer(minLength: 4)
+                gridSizeControl(width: 80)
+            }
+        } else if width >= 420 {
+            HStack(spacing: 8) {
+                Text("\(store.photoCount) 张")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: true, vertical: false)
+                selectionMenu
+                compactGroupingMenu
+                Spacer(minLength: 0)
+                gridSizeControl(width: 64)
+            }
+        } else {
+            HStack(spacing: 8) {
+                selectionMenu
+                compactGroupingMenu
+                Spacer(minLength: 0)
+            }
         }
     }
 
@@ -149,51 +178,87 @@ struct PhotoGridView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-            Menu {
-                Button {
-                    beginSelectMode()
-                } label: {
-                    Label("进入选择模式", systemImage: "checkmark.circle")
-                }
+            selectionMenu
+            groupingPicker(width: 148)
+        }
+    }
 
-                Divider()
-
-                Button {
-                    selectPhotos(.all)
-                } label: {
-                    Label("选择所有照片", systemImage: "photo.stack")
-                }
-
-                Button {
-                    selectPhotos(.month)
-                } label: {
-                    Label("选择当前月份", systemImage: "calendar")
-                }
-                .disabled(selectionReferencePhoto == nil)
-
-                Button {
-                    selectPhotos(.day)
-                } label: {
-                    Label("选择当前日期", systemImage: "calendar.day.timeline.left")
-                }
-                .disabled(selectionReferencePhoto == nil)
+    private var selectionMenu: some View {
+        Menu {
+            Button {
+                beginSelectMode()
             } label: {
-                Label("选择", systemImage: "checkmark.circle")
-                    .font(.caption)
+                Label("进入选择模式", systemImage: "checkmark.circle")
             }
-            .menuStyle(.button)
-            .buttonStyle(.bordered)
-            .controlSize(.small)
 
+            Divider()
+
+            Button {
+                selectPhotos(.all)
+            } label: {
+                Label("选择所有照片", systemImage: "photo.stack")
+            }
+
+            Button {
+                selectPhotos(.month)
+            } label: {
+                Label("选择当前月份", systemImage: "calendar")
+            }
+            .disabled(selectionReferencePhoto == nil)
+
+            Button {
+                selectPhotos(.day)
+            } label: {
+                Label("选择当前日期", systemImage: "calendar.day.timeline.left")
+            }
+            .disabled(selectionReferencePhoto == nil)
+        } label: {
+            Label("选择", systemImage: "checkmark.circle")
+                .font(.caption)
+        }
+        .menuStyle(.button)
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
+    private func groupingPicker(width: CGFloat) -> some View {
+        Picker("分组", selection: $groupingMode) {
+            ForEach(PhotoGroupingMode.allCases) { mode in
+                Label(mode.title, systemImage: mode.systemImage).tag(mode)
+            }
+        }
+        .pickerStyle(.segmented)
+        .controlSize(.small)
+        .frame(width: width)
+        .help("按拍摄时间分组")
+    }
+
+    private var compactGroupingMenu: some View {
+        Menu {
             Picker("分组", selection: $groupingMode) {
                 ForEach(PhotoGroupingMode.allCases) { mode in
                     Label(mode.title, systemImage: mode.systemImage).tag(mode)
                 }
             }
-            .pickerStyle(.segmented)
-            .controlSize(.small)
-            .frame(width: 148)
-            .help("按拍摄时间分组")
+        } label: {
+            Label(groupingMode.title, systemImage: groupingMode.systemImage)
+        }
+        .menuStyle(.button)
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .fixedSize(horizontal: true, vertical: false)
+        .help("按拍摄时间分组")
+    }
+
+    private func gridSizeControl(width: CGFloat) -> some View {
+        HStack(spacing: 8) {
+            Slider(value: $gridSize, in: minGridSize...maxGridSize)
+                .frame(width: width)
+                .help("缩略图 \(Int(gridSize))px")
+            Image(systemName: "square.grid.2x2")
+                .foregroundStyle(.secondary)
+                .frame(width: 24, height: 24)
         }
     }
 
