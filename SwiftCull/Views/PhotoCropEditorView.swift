@@ -28,7 +28,7 @@ struct PhotoCropEditorView: View {
             HStack {
                 Text("裁剪 · \(photo.displayName)").font(.headline)
                 Spacer()
-                Text("拖动边角调整 · 空格拖动平移 · 双击适合窗口")
+                Text("拖动框内移动 · 拖动四角调整 · 空格拖动平移 · 捏合缩放 · 双击复位")
                     .font(.caption).foregroundStyle(.secondary)
             }
             .padding(16)
@@ -69,12 +69,16 @@ struct PhotoCropEditorView: View {
                 .contentShape(Rectangle())
                 .gesture(editorDrag(canvas: geometry.size))
                 .simultaneousGesture(MagnifyGesture()
-                    .onChanged { value in zoom = min(8, max(1, steadyZoom * value.magnification)) }
+                    .onChanged { value in
+                        zoom = min(8, max(1, steadyZoom * value.magnification))
+                        limitPan(canvas: geometry.size)
+                    }
                     .onEnded { _ in steadyZoom = zoom })
                 .simultaneousGesture(TapGesture(count: 2).onEnded {
                     zoom = 1; steadyZoom = 1; pan = .zero; steadyPan = .zero
                 })
                 .clipped()
+                .onChange(of: geometry.size) { _, size in limitPan(canvas: size) }
             }
             .frame(minWidth: 700, minHeight: 480)
 
@@ -107,7 +111,13 @@ struct PhotoCropEditorView: View {
                 return event
             }
         }
-        .onDisappear { if let keyMonitor { NSEvent.removeMonitor(keyMonitor) } }
+        .onDisappear {
+            spaceHeld = false
+            if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { _ in
+            spaceHeld = false
+        }
         .task(id: photo.id) {
             let path = photo.primaryImagePath
             let result = await Task.detached(priority: .userInitiated) { () -> (CGImage, Int, Int)? in
@@ -133,12 +143,13 @@ struct PhotoCropEditorView: View {
     }
 
     private func imageFrame(canvas: CGSize, image: NSImage) -> CGRect {
-        let fit = min(canvas.width / max(1, image.size.width), canvas.height / max(1, image.size.height))
-        let width = image.size.width * fit * zoom
-        let height = image.size.height * fit * zoom
-        return CGRect(x: (canvas.width - width) / 2 + pan.width,
-                      y: (canvas.height - height) / 2 + pan.height,
-                      width: width, height: height)
+        CropViewport.imageFrame(canvas: canvas, image: image.size, zoom: zoom, pan: pan)
+    }
+
+    private func limitPan(canvas: CGSize) {
+        guard let image else { return }
+        pan = CropViewport.clampedPan(pan, canvas: canvas, image: image.size, zoom: zoom)
+        steadyPan = pan
     }
 
     private func cropFrame(in imageFrame: CGRect) -> CGRect {
@@ -191,8 +202,10 @@ struct PhotoCropEditorView: View {
                 }
                 guard let start = dragStartCrop else { return }
                 if dragMode == .pan {
-                    pan = CGSize(width: steadyPan.width + value.translation.width,
-                                 height: steadyPan.height + value.translation.height)
+                    pan = CropViewport.clampedPan(
+                        CGSize(width: steadyPan.width + value.translation.width,
+                               height: steadyPan.height + value.translation.height),
+                        canvas: canvas, image: image.size, zoom: zoom)
                     return
                 }
                 let dx = Double(value.translation.width / max(1, frame.width))
