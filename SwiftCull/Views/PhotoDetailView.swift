@@ -53,6 +53,7 @@ struct PhotoDetailView: View {
     var showsPreview = true
     @State private var exifInfo: PhotoExifInfo?
     @State private var exifTask: Task<Void, Never>?
+    @State private var watermarkPhoto: PhotoEntry?
 
     private var photo: PhotoEntry? {
         store.selectedPhoto
@@ -89,6 +90,9 @@ struct PhotoDetailView: View {
             }
             .onChange(of: photo.id) { _, _ in
                 loadExif(for: photo)
+            }
+            .sheet(item: $watermarkPhoto) { selected in
+                WatermarkExportView(store: store, photos: [selected])
             }
         } else {
             VStack {
@@ -304,6 +308,16 @@ struct PhotoDetailView: View {
                         actionLabel("在 Finder 中显示", systemImage: "folder")
                     }
                     .buttonStyle(InspectorActionButtonStyle())
+                }
+
+                if photo.hasJpg || photo.hasNef {
+                    Button {
+                        watermarkPhoto = photo
+                    } label: {
+                        actionLabel("单张加水印并导出…", systemImage: "photo.badge.plus")
+                    }
+                    .buttonStyle(InspectorActionButtonStyle())
+                    .disabled(store.isExporting)
                 }
 
                 Button(role: .destructive) {
