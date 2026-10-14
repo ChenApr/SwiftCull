@@ -167,7 +167,7 @@ struct PhotoSinglePreviewView: View {
     @EnvironmentObject var store: PhotoStore
     let photo: PhotoEntry
 
-    @State private var watermarkPhoto: PhotoEntry?
+    @State private var watermarkSelection: WatermarkPhotoSelection?
 
     @State private var scale: CGFloat = 1
     @State private var steadyScale: CGFloat = 1
@@ -203,10 +203,12 @@ struct PhotoSinglePreviewView: View {
         .overlay(alignment: .topTrailing) { zoomControls }
         .contentShape(Rectangle())
         .contextMenu {
-            PhotoContextMenu(store: store, photo: photo) { watermarkPhoto = photo }
+            PhotoContextMenu(store: store, photo: photo, useSelection: false) { photos in
+                watermarkSelection = WatermarkPhotoSelection(photos: photos)
+            }
         }
-        .sheet(item: $watermarkPhoto) { selected in
-            WatermarkExportView(store: store, photos: [selected])
+        .sheet(item: $watermarkSelection) { selection in
+            WatermarkExportView(store: store, photos: selection.photos)
         }
         .safeAreaInset(edge: .top, spacing: 0) {
             VStack(spacing: 0) {

@@ -115,23 +115,16 @@ class PhotoStore: ObservableObject {
 
     var selectedCount: Int { selectedPhotos.count }
 
-    /// Right-clicking a selected card copies the whole selection; otherwise it copies that card.
-    func photosToCopy(clicked photo: PhotoEntry? = nil) -> [PhotoEntry] {
-        if let photo {
-            if selectedPhotos.count > 1, selectedPhotos.contains(photo.id) {
-                return selectedPhotoEntries
-            }
-            return [photo]
-        }
-        if viewMode == .grid, selectedPhotos.count > 1 {
-            return selectedPhotoEntries
-        }
-        return selectedPhoto.map { [$0] } ?? []
+    /// Actions on a selected card use the visible selection; an unselected card is a single target.
+    func contextPhotos(clicked photo: PhotoEntry? = nil, useSelection: Bool = true) -> [PhotoEntry] {
+        PhotoActionScope.targets(clicked: photo, selectedIDs: selectedPhotos,
+                                 visiblePhotos: filteredPhotos, fallback: selectedPhoto,
+                                 useSelection: useSelection && viewMode == .grid)
     }
 
     @discardableResult
-    func copyOriginalFiles(clicked photo: PhotoEntry? = nil) -> Bool {
-        let paths = photosToCopy(clicked: photo).flatMap { entry in
+    func copyOriginalFiles(clicked photo: PhotoEntry? = nil, useSelection: Bool = true) -> Bool {
+        let paths = contextPhotos(clicked: photo, useSelection: useSelection).flatMap { entry in
             [entry.jpgPath, entry.nefPath, entry.movPath].compactMap { $0 }
         }
         let urls = paths.filter { FileManager.default.fileExists(atPath: $0) }
@@ -140,6 +133,34 @@ class PhotoStore: ObservableObject {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         return pasteboard.writeObjects(urls)
+    }
+
+    func contextSetRating(_ rating: Int, clicked photo: PhotoEntry, useSelection: Bool = true) {
+        let targets = contextPhotos(clicked: photo, useSelection: useSelection)
+        if isSelectMode {
+            setRatings(rating, for: Set(targets.map(\.id)))
+        } else {
+            targets.forEach { setRating(rating, for: $0) }
+        }
+    }
+
+    func contextToggleTag(_ tag: String, clicked photo: PhotoEntry, useSelection: Bool = true) {
+        let targets = contextPhotos(clicked: photo, useSelection: useSelection)
+        let remove = targets.allSatisfy { $0.tags.contains(tag) }
+        if isSelectMode {
+            updateTag(tag, adding: !remove, for: Set(targets.map(\.id)))
+        } else {
+            targets.forEach { remove ? removeTag(tag, from: $0) : addTag(tag, to: $0) }
+        }
+    }
+
+    func contextClearTags(clicked photo: PhotoEntry, useSelection: Bool = true) {
+        let targets = contextPhotos(clicked: photo, useSelection: useSelection)
+        if isSelectMode {
+            clearTags(for: Set(targets.map(\.id)))
+        } else {
+            targets.forEach { clearTags(for: $0) }
+        }
     }
 
     var availableTags: [FinderTag] {
@@ -465,7 +486,10 @@ class PhotoStore: ObservableObject {
     }
 
     func batchSetRating(_ rating: Int) {
-        let ids = selectedPhotos
+        setRatings(rating, for: selectedPhotos)
+    }
+
+    private func setRatings(_ rating: Int, for ids: Set<String>) {
         guard !ids.isEmpty else { return }
         let photoMap = buildPhotoIndexMap()
         let filteredMap = buildFilteredIndexMap()
@@ -489,7 +513,10 @@ class PhotoStore: ObservableObject {
     }
 
     func batchAddTag(_ tag: String) {
-        let ids = selectedPhotos
+        updateTag(tag, adding: true, for: selectedPhotos)
+    }
+
+    private func updateTag(_ tag: String, adding: Bool, for ids: Set<String>) {
         guard !ids.isEmpty else { return }
         let photoMap = buildPhotoIndexMap()
         let filteredMap = buildFilteredIndexMap()
@@ -497,22 +524,34 @@ class PhotoStore: ObservableObject {
         for id in ids {
             if let index = photoMap[id] {
                 captureOriginalIfNeeded(id, index: index)
-                if !photos[index].tags.contains(tag) {
+                if adding && !photos[index].tags.contains(tag) {
                     photos[index].tags.append(tag)
+                } else if !adding {
+                    photos[index].tags.removeAll { $0 == tag }
                 }
             }
-            if let filteredIndex = filteredMap[id], !filteredPhotos[filteredIndex].tags.contains(tag) {
-                filteredPhotos[filteredIndex].tags.append(tag)
+            if let filteredIndex = filteredMap[id] {
+                if adding && !filteredPhotos[filteredIndex].tags.contains(tag) {
+                    filteredPhotos[filteredIndex].tags.append(tag)
+                } else if !adding {
+                    filteredPhotos[filteredIndex].tags.removeAll { $0 == tag }
+                }
             }
         }
-        if let selected = selectedPhoto, ids.contains(selected.id),
-           !(selectedPhoto?.tags.contains(tag) ?? true) {
-            selectedPhoto?.tags.append(tag)
+        if let selected = selectedPhoto, ids.contains(selected.id) {
+            if adding && !selected.tags.contains(tag) {
+                selectedPhoto?.tags.append(tag)
+            } else if !adding {
+                selectedPhoto?.tags.removeAll { $0 == tag }
+            }
         }
     }
 
     func batchClearTags() {
-        let ids = selectedPhotos
+        clearTags(for: selectedPhotos)
+    }
+
+    private func clearTags(for ids: Set<String>) {
         guard !ids.isEmpty else { return }
         let photoMap = buildPhotoIndexMap()
         let filteredMap = buildFilteredIndexMap()
@@ -902,7 +941,16 @@ class PhotoStore: ObservableObject {
     }
 
     func exportFilteredPhotos() {
-        guard !filteredPhotos.isEmpty else {
+        exportPhotos(filteredPhotos, scope: "筛选")
+    }
+
+    func exportSelectedPhotos() {
+        exportPhotos(selectedPhotoEntries, scope: "所选")
+    }
+
+    private func exportPhotos(_ photosToExport: [PhotoEntry], scope: String) {
+        guard !isExporting else { return }
+        guard !photosToExport.isEmpty else {
             exportMessage = "没有可导出的照片"
             return
         }
@@ -912,9 +960,10 @@ class PhotoStore: ObservableObject {
         let dateStr = dateFormatter.string(from: Date())
 
         let defaultFileName = "\(dateStr)-\(filterOptions.exportFileNameSuffix)"
+            + (scope == "所选" ? "-selected" : "")
 
         let panel = NSOpenPanel()
-        panel.title = "导出筛选照片"
+        panel.title = "导出\(scope)照片"
         panel.prompt = "选择保存位置"
         panel.canCreateDirectories = true
         panel.canChooseDirectories = true
@@ -925,7 +974,6 @@ class PhotoStore: ObservableObject {
         guard panel.runModal() == .OK, let selectedURL = panel.url else { return }
 
         let destinationDir = (selectedURL.path as NSString).appendingPathComponent(defaultFileName)
-        let photosToExport = filteredPhotos
         let fileTypeFilter = filterOptions.fileTypeFilter
         let total = photosToExport.count
         isExporting = true

@@ -1,64 +1,72 @@
 import AppKit
 import SwiftUI
 
+struct WatermarkPhotoSelection: Identifiable {
+    let id = UUID()
+    let photos: [PhotoEntry]
+}
+
 /// The actions available on a photo in both the grid and the zoomable preview.
 struct PhotoContextMenu: View {
     @ObservedObject var store: PhotoStore
     let photo: PhotoEntry
-    let onWatermark: () -> Void
+    var useSelection = true
+    let onWatermark: ([PhotoEntry]) -> Void
+
+    private var targets: [PhotoEntry] { store.contextPhotos(clicked: photo, useSelection: useSelection) }
+    private var isBatch: Bool { targets.count > 1 }
 
     private var sourceFiles: [URL] {
-        [photo.jpgPath, photo.nefPath, photo.movPath]
-            .compactMap { $0.map { URL(fileURLWithPath: $0) } }
+        targets.flatMap { entry in
+            [entry.jpgPath, entry.nefPath, entry.movPath]
+                .compactMap { $0.map { URL(fileURLWithPath: $0) } }
+        }
     }
 
-    private var copyCount: Int {
-        store.photosToCopy(clicked: photo).count
-    }
+    private var watermarkable: [PhotoEntry] { targets.filter { $0.hasJpg || $0.hasNef } }
 
     var body: some View {
         Menu {
             Button {
-                store.setRating(0, for: photo)
+                store.contextSetRating(0, clicked: photo, useSelection: useSelection)
             } label: {
-                Label("清除评分", systemImage: photo.rating == 0 ? "checkmark.circle.fill" : "star.slash")
+                Label("清除评分", systemImage: targets.allSatisfy { $0.rating == 0 }
+                      ? "checkmark.circle.fill" : "star.slash")
             }
             ForEach(1...5, id: \.self) { rating in
                 Button {
-                    store.setRating(rating, for: photo)
+                    store.contextSetRating(rating, clicked: photo, useSelection: useSelection)
                 } label: {
-                    Label("\(rating) 星", systemImage: photo.rating == rating ? "checkmark.circle.fill" : "star")
+                    Label("\(rating) 星", systemImage: targets.allSatisfy { $0.rating == rating }
+                          ? "checkmark.circle.fill" : "star")
                 }
             }
         } label: {
-            Label("评分", systemImage: "star")
+            Label(isBatch ? "给所选 \(targets.count) 张评分" : "评分", systemImage: "star")
         }
 
         Menu {
             ForEach(store.availableTags) { tag in
                 Button {
-                    if photo.tags.contains(tag.name) {
-                        store.removeTag(tag.name, from: photo)
-                    } else {
-                        store.addTag(tag.name, to: photo)
-                    }
+                    store.contextToggleTag(tag.name, clicked: photo, useSelection: useSelection)
                 } label: {
                     Label(tag.displayName,
-                          systemImage: photo.tags.contains(tag.name) ? "checkmark.circle.fill" : "tag")
+                          systemImage: targets.allSatisfy { $0.tags.contains(tag.name) }
+                            ? "checkmark.circle.fill" : "tag")
                 }
             }
-            Button("清除所有标签") { store.clearTags(for: photo) }
-                .disabled(photo.tags.isEmpty)
+            Button("清除所有标签") { store.contextClearTags(clicked: photo, useSelection: useSelection) }
+                .disabled(targets.allSatisfy { $0.tags.isEmpty })
         } label: {
-            Label("Finder 标签", systemImage: "tag")
+            Label(isBatch ? "给所选 \(targets.count) 张设标签" : "Finder 标签", systemImage: "tag")
         }
 
         Divider()
 
         Button {
-            store.copyOriginalFiles(clicked: photo)
+            store.copyOriginalFiles(clicked: photo, useSelection: useSelection)
         } label: {
-            Label(copyCount > 1 ? "复制所选原文件（\(copyCount) 张）" : "复制原文件（所有格式）",
+            Label(isBatch ? "复制所选原文件（\(targets.count) 张）" : "复制原文件（所有格式）",
                   systemImage: "document.on.document")
         }
         .disabled(sourceFiles.isEmpty)
@@ -66,28 +74,33 @@ struct PhotoContextMenu: View {
         Button {
             NSWorkspace.shared.activateFileViewerSelecting(sourceFiles)
         } label: {
-            Label("在 Finder 中显示", systemImage: "folder")
+            Label(isBatch ? "在 Finder 中显示所选文件" : "在 Finder 中显示", systemImage: "folder")
         }
         .disabled(sourceFiles.isEmpty)
 
         Button {
-            store.exportOriginalPhoto(photo)
+            if isBatch { store.exportSelectedPhotos() }
+            else { store.exportOriginalPhoto(photo) }
         } label: {
-            Label("导出原文件（所有格式）…", systemImage: "square.and.arrow.up")
+            Label(isBatch ? "导出所选 \(targets.count) 张照片…" : "导出原文件（所有格式）…",
+                  systemImage: "square.and.arrow.up")
         }
         .disabled(sourceFiles.isEmpty || store.isExporting)
 
-        Button(action: onWatermark) {
-            Label("单张加水印并导出…", systemImage: "photo.badge.plus")
+        Button { onWatermark(watermarkable) } label: {
+            Label(isBatch ? "所选 \(watermarkable.count) 张加水印并导出…" : "单张加水印并导出…",
+                  systemImage: "photo.badge.plus")
         }
-        .disabled((!photo.hasJpg && !photo.hasNef) || store.isExporting)
+        .disabled(watermarkable.isEmpty || store.isExporting)
 
         Divider()
 
         Button(role: .destructive) {
-            store.requestDelete(photo)
+            if isBatch { store.requestDeleteSelected() }
+            else { store.requestDelete(photo) }
         } label: {
-            Label("移至废纸篓（所有格式）", systemImage: "trash")
+            Label(isBatch ? "将所选 \(targets.count) 张移至废纸篓" : "移至废纸篓（所有格式）",
+                  systemImage: "trash")
         }
     }
 }
