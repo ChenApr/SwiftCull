@@ -556,6 +556,7 @@ struct PhotoGridContent: View {
     @State private var cachedPhotoIds: Set<String> = []
     @State private var lastDragUpdateTime: CFAbsoluteTime = 0
     @State private var didDragSelect = false
+    @State private var watermarkPhoto: PhotoEntry?
 
     private let gridCoordinateSpace = "photo-grid-space"
 
@@ -672,6 +673,9 @@ struct PhotoGridContent: View {
                 proxy.scrollTo(selectedId, anchor: .center)
             }
         }
+        .sheet(item: $watermarkPhoto) { selected in
+            WatermarkExportView(store: store, photos: [selected])
+        }
     }
 
     private func photoCard(_ photo: PhotoEntry) -> some View {
@@ -683,6 +687,9 @@ struct PhotoGridContent: View {
             isSelectMode: isSelectMode
         )
         .id(photo.id)
+        .contextMenu {
+            PhotoContextMenu(store: store, photo: photo) { watermarkPhoto = photo }
+        }
         .onAppear {
             store.preloadThumbnails(around: photo, size: gridSize)
         }

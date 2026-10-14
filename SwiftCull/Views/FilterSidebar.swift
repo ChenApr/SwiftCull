@@ -24,13 +24,6 @@ struct FilterSidebar: View {
                 .padding(.horizontal, 12)
                 .padding(.bottom, 12)
         }
-        .alert("导出结果", isPresented: .constant(store.exportMessage != nil)) {
-            Button("好的") {
-                store.exportMessage = nil
-            }
-        } message: {
-            Text(store.exportMessage ?? "")
-        }
         .sheet(isPresented: $showingWatermarkExport) {
             WatermarkExportView(store: store)
         }

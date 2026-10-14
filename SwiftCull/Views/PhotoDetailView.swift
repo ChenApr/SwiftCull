@@ -116,6 +116,9 @@ struct PhotoDetailView: View {
                 }
                 .frame(height: 220)
                 .clipped()
+                .contextMenu {
+                    PhotoContextMenu(store: store, photo: photo) { watermarkPhoto = photo }
+                }
 
             HStack {
                 fileTypePill(photo)

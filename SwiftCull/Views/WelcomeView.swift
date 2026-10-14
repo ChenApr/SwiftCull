@@ -163,7 +163,10 @@ struct ToolbarInfoView: View {
 }
 
 struct PhotoSinglePreviewView: View {
+    @EnvironmentObject var store: PhotoStore
     let photo: PhotoEntry
+
+    @State private var watermarkPhoto: PhotoEntry?
 
     @State private var scale: CGFloat = 1
     @State private var steadyScale: CGFloat = 1
@@ -197,6 +200,13 @@ struct PhotoSinglePreviewView: View {
         }
         .overlay(alignment: .bottom) { infoBar }
         .overlay(alignment: .topTrailing) { zoomControls }
+        .contentShape(Rectangle())
+        .contextMenu {
+            PhotoContextMenu(store: store, photo: photo) { watermarkPhoto = photo }
+        }
+        .sheet(item: $watermarkPhoto) { selected in
+            WatermarkExportView(store: store, photos: [selected])
+        }
         .safeAreaInset(edge: .top, spacing: 0) {
             VStack(spacing: 0) {
                 ShortcutHintBar()
