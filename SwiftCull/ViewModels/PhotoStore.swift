@@ -1010,4 +1010,53 @@ class PhotoStore: ObservableObject {
         }
     }
 
+    func exportOriginalPhoto(_ photo: PhotoEntry) {
+        guard !isExporting else { return }
+        let paths = [photo.jpgPath, photo.nefPath, photo.movPath].compactMap { $0 }
+        guard !paths.isEmpty else { return }
+        let panel = NSOpenPanel()
+        panel.title = "导出原文件"
+        panel.prompt = "导出到此目录"
+        panel.canCreateDirectories = true
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        guard panel.runModal() == .OK, let directory = panel.url else { return }
+        isExporting = true
+        exportProgress = 0
+        Task.detached(priority: .utility) {
+            var count = 0
+            var errors: [String] = []
+            for (index, path) in paths.enumerated() {
+                let source = URL(fileURLWithPath: path)
+                let stem = source.deletingPathExtension().lastPathComponent
+                let ext = source.pathExtension
+                var suffix = 1
+                while true {
+                    let name = suffix == 1 ? stem : "\(stem)_\(suffix)"
+                    let target = directory.appendingPathComponent(name).appendingPathExtension(ext)
+                    do {
+                        try FileManager.default.copyItem(at: source, to: target)
+                        count += 1
+                        break
+                    } catch {
+                        guard FileManager.default.fileExists(atPath: target.path) else {
+                            errors.append("\(source.lastPathComponent)：\(error.localizedDescription)")
+                            break
+                        }
+                        suffix += 1
+                    }
+                }
+                await MainActor.run { [weak self] in
+                    self?.exportProgress = Double(index + 1) / Double(paths.count)
+                }
+            }
+            let result = errors.isEmpty ? "已导出 \(count) 个原文件到 \(directory.path)"
+                : "已导出 \(count) 个原文件，\(errors.count) 个失败。\(errors[0])"
+            await MainActor.run { [weak self] in
+                self?.isExporting = false
+                self?.exportProgress = 0
+                self?.exportMessage = result
+            }
+        }
+    }
 }

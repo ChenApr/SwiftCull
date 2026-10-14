@@ -43,6 +43,14 @@ struct ContentView: View {
                 Text("将 \(store.photosToDelete.count) 张照片（所有格式文件）移至废纸篓？此操作可通过废纸篓恢复。")
             }
         }
+        .alert("导出结果", isPresented: Binding(
+            get: { store.exportMessage != nil },
+            set: { if !$0 { store.exportMessage = nil } }
+        )) {
+            Button("好的") { store.exportMessage = nil }
+        } message: {
+            Text(store.exportMessage ?? "")
+        }
         .sheet(isPresented: $store.showingShortcutGuide) {
             ShortcutGuideView()
         }
