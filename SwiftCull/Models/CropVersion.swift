@@ -1,4 +1,5 @@
 import Foundation
+import CoreGraphics
 
 /// Coordinates refer to the orientation-corrected full image, with origin at its top left.
 struct CropRect: Codable, Hashable, Sendable {
@@ -103,6 +104,31 @@ enum CropGeometry {
         return CropRect(x: right ? anchorX : anchorX - width,
                         y: bottom ? anchorY : anchorY - height,
                         width: width, height: height).normalized
+    }
+}
+
+/// Keep the zoomed image reachable while the crop frame is edited in the window.
+enum CropViewport {
+    static func imageFrame(canvas: CGSize, image: CGSize, zoom: CGFloat, pan: CGSize) -> CGRect {
+        let fit = min(canvas.width / max(1, image.width), canvas.height / max(1, image.height))
+        let width = image.width * fit * zoom
+        let height = image.height * fit * zoom
+        let limitedPan = clampedPan(pan, canvas: canvas, displayedImage: CGSize(width: width, height: height))
+        return CGRect(x: (canvas.width - width) / 2 + limitedPan.width,
+                      y: (canvas.height - height) / 2 + limitedPan.height,
+                      width: width, height: height)
+    }
+
+    static func clampedPan(_ pan: CGSize, canvas: CGSize, image: CGSize, zoom: CGFloat) -> CGSize {
+        let frame = imageFrame(canvas: canvas, image: image, zoom: zoom, pan: .zero)
+        return clampedPan(pan, canvas: canvas, displayedImage: frame.size)
+    }
+
+    private static func clampedPan(_ pan: CGSize, canvas: CGSize, displayedImage: CGSize) -> CGSize {
+        let horizontalLimit = max(0, (displayedImage.width - canvas.width) / 2)
+        let verticalLimit = max(0, (displayedImage.height - canvas.height) / 2)
+        return CGSize(width: min(horizontalLimit, max(-horizontalLimit, pan.width)),
+                      height: min(verticalLimit, max(-verticalLimit, pan.height)))
     }
 }
 

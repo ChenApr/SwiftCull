@@ -27,6 +27,19 @@ enum CropSmoke {
         precondition(CGImageDestinationFinalize(destination))
 
         let crop = CropRect(x: 0.5, y: 0, width: 0.5, height: 1)
+        let canvas = CGSize(width: 800, height: 600)
+        let displayImage = CGSize(width: 1200, height: 800)
+        let fittedPan = CropViewport.clampedPan(CGSize(width: 500, height: -500),
+                                                canvas: canvas, image: displayImage, zoom: 1)
+        precondition(fittedPan == .zero)
+        let zoomedPan = CropViewport.clampedPan(CGSize(width: 500, height: -500),
+                                                canvas: canvas, image: displayImage, zoom: 2)
+        precondition(abs(zoomedPan.width - 400) < 0.001)
+        precondition(abs(zoomedPan.height + 233.33333333333337) < 0.001)
+        let zoomedFrame = CropViewport.imageFrame(canvas: canvas, image: displayImage,
+                                                   zoom: 2, pan: zoomedPan)
+        precondition(abs(zoomedFrame.minX) < 0.001)
+        precondition(abs(zoomedFrame.maxY - canvas.height) < 0.001)
         precondition(CropAspectRatio.allCases.map(\.title) ==
                      ["自由", "原始比例", "1:1", "3:2", "4:3", "16:9"])
         let square = CropGeometry.fitted(.full, imageWidth: 1200, imageHeight: 800,
