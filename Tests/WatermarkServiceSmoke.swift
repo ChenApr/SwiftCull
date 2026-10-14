@@ -38,6 +38,17 @@ struct WatermarkServiceSmoke {
                 jpgFileSize: Int64(original.count), nefFileSize: nil, movFileSize: nil,
                 fileDate: Date(), modificationDate: Date()
             )
+            var croppedPhoto = photo
+            croppedPhoto.cropRect = CropRect(x: 0.25, y: 0, width: 0.5, height: 1)
+            let croppedOverlay = try WatermarkService.render(photo: croppedPhoto, preset: .cornerParameters)
+            precondition(croppedOverlay.pixelsWide == width / 2 && croppedOverlay.pixelsHigh == height,
+                         "Watermark overlay ignored crop")
+            let automaticCrop = try WatermarkService.render(photo: croppedPhoto, preset: .standard,
+                                                            matchOrientation: true)
+            let chosenPreset: WatermarkPreset = height > width / 2 ? .standardPortrait : .standard
+            let expectedCrop = try WatermarkService.render(photo: croppedPhoto, preset: chosenPreset)
+            precondition(automaticCrop.tiffRepresentation == expectedCrop.tiffRepresentation,
+                         "Watermark orientation did not follow crop")
             let roundtripDirectory = directory.appendingPathComponent("roundtrip-\(width)x\(height)")
             if width > height {
                 let nikonInput = directory.appendingPathComponent("synthetic-nikon.jpg")

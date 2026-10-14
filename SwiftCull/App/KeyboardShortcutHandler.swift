@@ -42,14 +42,10 @@ enum KeyboardShortcutHandler {
 
         switch keyCode {
         case 49: // Space
-            guard !hasCommandModifier else { return false }
+            guard !hasCommandModifier, NSApp.keyWindow?.isSheet != true,
+                  NSApp.keyWindow?.attachedSheet == nil else { return false }
             if let photo = store.selectedPhoto {
-                let path = photo.primaryImagePath
-                if !path.isEmpty {
-                    QuickLookHelper.shared.preview(URL(fileURLWithPath: path))
-                } else if let movPath = photo.movPath {
-                    QuickLookHelper.shared.preview(URL(fileURLWithPath: movPath))
-                }
+                store.previewPhoto(photo)
                 return true
             }
         case 125: // Down

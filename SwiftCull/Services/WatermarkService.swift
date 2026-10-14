@@ -186,19 +186,20 @@ enum WatermarkService {
                        matchOrientation: Bool, to directory: URL) throws -> URL {
         let data = try jpegData(photo: photo, preset: preset, sourcePath: sourcePath,
                                 matchOrientation: matchOrientation)
-        return try write(data, sourcePath: sourcePath, to: directory)
+        return try write(data, photo: photo, sourcePath: sourcePath, to: directory)
     }
 
     @discardableResult
     static func export(photo: PhotoEntry, configuration: WatermarkConfiguration,
                        sourcePath: String, to directory: URL) throws -> URL {
         let data = try jpegData(photo: photo, configuration: configuration, sourcePath: sourcePath)
-        return try write(data, sourcePath: sourcePath, to: directory)
+        return try write(data, photo: photo, sourcePath: sourcePath, to: directory)
     }
 
-    private static func write(_ data: Data, sourcePath: String, to directory: URL) throws -> URL {
+    private static func write(_ data: Data, photo: PhotoEntry, sourcePath: String, to directory: URL) throws -> URL {
         let source = URL(fileURLWithPath: sourcePath)
-        let name = source.deletingPathExtension().lastPathComponent + "_watermark"
+        let versionSuffix = photo.isVersionCopy ? "_\(photo.versionID!.uuidString.prefix(8))" : ""
+        let name = source.deletingPathExtension().lastPathComponent + versionSuffix + "_watermark"
         let fileManager = FileManager.default
         let temporary = directory.appendingPathComponent(".swiftcull-\(UUID().uuidString).tmp")
         try data.write(to: temporary, options: .atomic)
