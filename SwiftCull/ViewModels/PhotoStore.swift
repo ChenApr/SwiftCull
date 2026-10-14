@@ -119,6 +119,12 @@ class PhotoStore: ObservableObject {
 
     var selectedCount: Int { selectedPhotos.count }
 
+    var canEditSelectedCrop: Bool {
+        selectedPhotos.count == 1 && selectedPhoto.map {
+            selectedPhotos.contains($0.id) && !$0.isVideoOnly
+        } == true
+    }
+
     func versions(for photo: PhotoEntry) -> [PhotoEntry] {
         photos.filter { $0.sourceID == photo.sourceID && !$0.isDeleted }
     }
@@ -143,6 +149,13 @@ class PhotoStore: ObservableObject {
     func editCrop(_ photo: PhotoEntry) {
         guard !photo.isVideoOnly else { return }
         cropEditorPhoto = photo
+    }
+
+    @discardableResult
+    func editSelectedCrop() -> Bool {
+        guard canEditSelectedCrop, let photo = selectedPhoto else { return false }
+        editCrop(photo)
+        return true
     }
 
     func previewPhoto(_ photo: PhotoEntry) {
