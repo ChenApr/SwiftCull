@@ -53,7 +53,7 @@ struct PhotoDetailView: View {
     var showsPreview = true
     @State private var exifInfo: PhotoExifInfo?
     @State private var exifTask: Task<Void, Never>?
-    @State private var watermarkPhoto: PhotoEntry?
+    @State private var watermarkSelection: WatermarkPhotoSelection?
 
     private var photo: PhotoEntry? {
         store.selectedPhoto
@@ -80,7 +80,7 @@ struct PhotoDetailView: View {
                 .scrollIndicators(.automatic)
             }
             .background(detailBackground)
-            .frame(minWidth: 300, idealWidth: 400)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .onAppear {
                 loadExif(for: photo)
             }
@@ -91,8 +91,8 @@ struct PhotoDetailView: View {
             .onChange(of: photo.id) { _, _ in
                 loadExif(for: photo)
             }
-            .sheet(item: $watermarkPhoto) { selected in
-                WatermarkExportView(store: store, photos: [selected])
+            .sheet(item: $watermarkSelection) { selection in
+                WatermarkExportView(store: store, photos: selection.photos)
             }
         } else {
             VStack {
@@ -117,7 +117,9 @@ struct PhotoDetailView: View {
                 .frame(height: 220)
                 .clipped()
                 .contextMenu {
-                    PhotoContextMenu(store: store, photo: photo) { watermarkPhoto = photo }
+                    PhotoContextMenu(store: store, photo: photo, useSelection: false) { photos in
+                        watermarkSelection = WatermarkPhotoSelection(photos: photos)
+                    }
                 }
 
             HStack {
@@ -225,7 +227,7 @@ struct PhotoDetailView: View {
     private func ratingSection(_ photo: PhotoEntry) -> some View {
         DetailCard(title: "评分", systemImage: "star") {
             RatingView(rating: photo.rating) { newRating in
-                store.setRating(newRating, for: photo)
+                store.contextSetRating(newRating, clicked: photo, useSelection: false)
             }
         }
     }
@@ -238,13 +240,13 @@ struct PhotoDetailView: View {
                         FlowLayout(spacing: 6) {
                             ForEach(photo.tags, id: \.self) { tag in
                                 TagChip(tag: tag) {
-                                    store.removeTag(tag, from: photo)
+                                    store.contextToggleTag(tag, clicked: photo, useSelection: false)
                                 }
                             }
                         }
                         Spacer(minLength: 6)
                         Button {
-                            store.clearTags(for: photo)
+                            store.contextClearTags(clicked: photo, useSelection: false)
                         } label: {
                             Image(systemName: "tag.slash")
                                 .font(.system(size: 12, weight: .semibold))
@@ -267,7 +269,7 @@ struct PhotoDetailView: View {
                     FlowLayout(spacing: 6) {
                         ForEach(store.availableTags.filter { !photo.tags.contains($0.name) }) { tag in
                             Button {
-                                store.addTag(tag.name, to: photo)
+                                store.contextToggleTag(tag.name, clicked: photo, useSelection: false)
                             } label: {
                                 HStack(spacing: 5) {
                                     Circle()
@@ -292,17 +294,8 @@ struct PhotoDetailView: View {
     private func actionSection(_ photo: PhotoEntry) -> some View {
         DetailCard(title: "操作", systemImage: "slider.horizontal.3") {
             VStack(spacing: 6) {
-                let activePhotos: [PhotoEntry] = {
-                    if store.selectedPhotos.count > 1 {
-                        return store.selectedPhotoEntries
-                    }
-                    return [photo]
-                }()
-
-                let jpgFiles = activePhotos.compactMap(\.jpgPath).map { URL(fileURLWithPath: $0) }
-                let rawFiles = activePhotos.compactMap(\.nefPath).map { URL(fileURLWithPath: $0) }
-                let movFiles = activePhotos.compactMap(\.movPath).map { URL(fileURLWithPath: $0) }
-                let allFiles = jpgFiles + rawFiles + movFiles
+                let allFiles = [photo.jpgPath, photo.nefPath, photo.movPath]
+                    .compactMap { $0.map { URL(fileURLWithPath: $0) } }
 
                 if !allFiles.isEmpty {
                     Button {
@@ -311,11 +304,19 @@ struct PhotoDetailView: View {
                         actionLabel("在 Finder 中显示", systemImage: "folder")
                     }
                     .buttonStyle(InspectorActionButtonStyle())
+
+                    Button {
+                        store.exportOriginalPhoto(photo)
+                    } label: {
+                        actionLabel("导出此照片原文件…", systemImage: "square.and.arrow.up")
+                    }
+                    .buttonStyle(InspectorActionButtonStyle())
+                    .disabled(store.isExporting)
                 }
 
                 if photo.hasJpg || photo.hasNef {
                     Button {
-                        watermarkPhoto = photo
+                        watermarkSelection = WatermarkPhotoSelection(photos: [photo])
                     } label: {
                         actionLabel("单张加水印并导出…", systemImage: "photo.badge.plus")
                     }
@@ -324,14 +325,9 @@ struct PhotoDetailView: View {
                 }
 
                 Button(role: .destructive) {
-                    if store.selectedPhotos.count > 1 {
-                        store.requestDeleteSelected()
-                    } else {
-                        store.requestDelete(photo)
-                    }
+                    store.requestDelete(photo)
                 } label: {
-                    let count = store.selectedPhotos.count
-                    actionLabel(count > 1 ? "移至废纸篓 (\(count) 张)" : "移至废纸篓 (所有格式)", systemImage: "trash")
+                    actionLabel("移至废纸篓 (此照片所有格式)", systemImage: "trash")
                 }
                 .buttonStyle(InspectorActionButtonStyle(isDestructive: true))
             }

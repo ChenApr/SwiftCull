@@ -65,7 +65,7 @@ struct WatermarkExportView: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(photos == nil ? "批量水印导出预览" : "单张水印导出")
+                    Text(photos?.count == 1 ? "单张水印导出预览" : "批量水印导出预览")
                         .font(.title2.bold())
                     Text("逐张检查水印，选择样式并决定是否导出")
                         .font(.caption)
@@ -87,7 +87,7 @@ struct WatermarkExportView: View {
             }
         }
         .padding(18)
-        .frame(width: photos == nil ? 1120 : 880, height: 690)
+        .frame(width: photos?.count == 1 ? 880 : 1120, height: 690)
         .onAppear(perform: prepareReview)
         .task(id: previewKey) { await loadPreview() }
         .sheet(item: $editingConfiguration) { configuration in

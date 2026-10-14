@@ -111,7 +111,7 @@ struct ContentView: View {
             PhotoDetailView(showsPreview: store.viewMode == .grid)
                 .safeAreaInset(edge: .top, spacing: 0) {
                     HStack {
-                        Label("照片详情", systemImage: "info.circle")
+                        Label("当前照片详情", systemImage: "info.circle")
                             .font(.system(size: 12, weight: .semibold))
                             .foregroundStyle(.secondary)
                         Spacer()
