@@ -969,7 +969,8 @@ class PhotoStore: ObservableObject {
         }
     }
 
-    func exportWatermarkedPhotos(preset: WatermarkPreset, matchOrientation: Bool, to directory: URL) {
+    func exportWatermarkedPhotos(preset: WatermarkPreset, configuration: WatermarkConfiguration? = nil,
+                                 matchOrientation: Bool, to directory: URL) {
         let photosToExport = filteredPhotos.filter { $0.jpgPath != nil || $0.nefPath != nil }
         guard !photosToExport.isEmpty, !isExporting else { return }
         let preferRaw = filterOptions.fileTypeFilter == .nefOnly
@@ -984,10 +985,14 @@ class PhotoStore: ObservableObject {
                     guard let sourcePath = photo.watermarkSourcePath(preferRaw: preferRaw) else {
                         throw WatermarkError.unreadableImage
                     }
-                    try WatermarkService.export(photo: photo, preset: preset,
-                                                sourcePath: sourcePath,
-                                                matchOrientation: matchOrientation,
-                                                to: directory)
+                    if let configuration {
+                        try WatermarkService.export(photo: photo, configuration: configuration,
+                                                    sourcePath: sourcePath, to: directory)
+                    } else {
+                        try WatermarkService.export(photo: photo, preset: preset,
+                                                    sourcePath: sourcePath,
+                                                    matchOrientation: matchOrientation, to: directory)
+                    }
                     exported += 1
                 } catch {
                     failures.append("\(photo.displayName)：\(error.localizedDescription)")

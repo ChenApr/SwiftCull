@@ -4,12 +4,37 @@ import SwiftUI
 struct WatermarkExportView: View {
     @ObservedObject var store: PhotoStore
     @Environment(\.dismiss) private var dismiss
+    @StateObject private var presetStore = WatermarkPresetStore()
 
-    @State private var preset: WatermarkPreset = .standard
+    private enum Choice: Hashable {
+        case builtIn(WatermarkPreset)
+        case custom(UUID)
+    }
+
+    @State private var choice: Choice = .builtIn(.standard)
     @State private var matchPhotoOrientation = true
     @State private var preview: NSImage?
     @State private var previewError: String?
     @State private var outputDirectory: URL?
+    @State private var editingConfiguration: WatermarkConfiguration?
+    @State private var deleteConfirmation = false
+    @State private var presetError: String?
+
+    private var configuration: WatermarkConfiguration? {
+        guard case .custom(let id) = choice else { return nil }
+        return presetStore.configurations.first { $0.id == id }
+    }
+
+    private var preset: WatermarkPreset {
+        switch choice {
+        case .builtIn(let value): return value
+        case .custom: return configuration?.basePreset ?? .standard
+        }
+    }
+
+    private var previewKey: String {
+        "\(choice)|\(matchPhotoOrientation)|\(configuration?.hashValue ?? 0)"
+    }
 
     private var previewPhoto: PhotoEntry? {
         store.selectedPhotoEntries.first(where: { $0.hasJpg || $0.hasNef })
@@ -47,26 +72,46 @@ struct WatermarkExportView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 12))
 
                 VStack(alignment: .leading, spacing: 14) {
-                    Picker("水印预设", selection: $preset) {
+                    Picker("水印预设", selection: $choice) {
                         Section("横拍模板") {
                             ForEach(WatermarkPreset.landscapePresets) { item in
-                                Text(item.rawValue).tag(item)
+                                Text(item.rawValue).tag(Choice.builtIn(item))
                             }
                         }
                         Section("竖拍模板") {
                             ForEach(WatermarkPreset.portraitPresets) { item in
-                                Text(item.rawValue).tag(item)
+                                Text(item.rawValue).tag(Choice.builtIn(item))
+                            }
+                        }
+                        if !presetStore.configurations.isEmpty {
+                            Section("自定义预设") {
+                                ForEach(presetStore.configurations) { item in
+                                    Text(item.name).tag(Choice.custom(item.id))
+                                }
                             }
                         }
                     }
                     .frame(width: 250)
 
                     Toggle("按每张照片方向自动匹配", isOn: $matchPhotoOrientation)
+                        .disabled(configuration != nil)
                         .help("混合横拍和竖拍时，自动选用相同风格的对应模板；独立的「尼康竖拍」始终固定")
 
-                    Text(preset.detail)
+                    Text(configuration == nil ? preset.detail : "自定义画布和组件，适用于横拍及竖拍")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+
+                    HStack {
+                        Button("新建预设…") {
+                            editingConfiguration = WatermarkConfiguration.draft(from: preset)
+                        }
+                        Button("编辑预设…") {
+                            editingConfiguration = configuration ?? WatermarkConfiguration.draft(from: preset)
+                        }
+                    }
+                    if configuration != nil {
+                        Button("删除此预设", role: .destructive) { deleteConfirmation = true }
+                    }
 
                     Divider()
 
@@ -88,6 +133,7 @@ struct WatermarkExportView: View {
                     Button("导出水印照片") {
                         guard let outputDirectory else { return }
                         store.exportWatermarkedPhotos(preset: preset,
+                                                      configuration: configuration,
                                                       matchOrientation: matchPhotoOrientation,
                                                       to: outputDirectory)
                         dismiss()
@@ -99,8 +145,29 @@ struct WatermarkExportView: View {
             }
         }
         .padding(20)
-        .frame(width: 850, height: 520)
-        .task(id: "\(preset.rawValue)|\(matchPhotoOrientation)") { await loadPreview() }
+        .frame(width: 900, height: 610)
+        .task(id: previewKey) { await loadPreview() }
+        .sheet(item: $editingConfiguration) { current in
+            WatermarkPresetEditorView(configuration: current, photo: previewPhoto,
+                                      sourcePath: previewPhoto?.watermarkSourcePath(
+                                        preferRaw: store.filterOptions.fileTypeFilter == .nefOnly
+                                      )) { updated in
+                try presetStore.save(updated)
+                choice = .custom(updated.id)
+            }
+        }
+        .confirmationDialog("删除自定义预设？", isPresented: $deleteConfirmation) {
+            Button("删除预设", role: .destructive) {
+                guard case .custom(let id) = choice else { return }
+                do {
+                    try presetStore.delete(id)
+                    choice = .builtIn(.standard)
+                } catch { presetError = error.localizedDescription }
+            }
+        }
+        .alert("预设操作失败", isPresented: Binding(
+            get: { presetError != nil }, set: { if !$0 { presetError = nil } }
+        )) { Button("好") { presetError = nil } } message: { Text(presetError ?? "") }
     }
 
     private func chooseDirectory() {
@@ -124,13 +191,19 @@ struct WatermarkExportView: View {
             return
         }
         let selectedPreset = preset
+        let selectedConfiguration = configuration
         let automatic = matchPhotoOrientation
         let sourcePath = photo.watermarkSourcePath(preferRaw: store.filterOptions.fileTypeFilter == .nefOnly)
         do {
             let data = try await Task.detached(priority: .userInitiated) {
-                try WatermarkService.previewData(photo: photo, preset: selectedPreset,
-                                                 sourcePath: sourcePath,
-                                                 matchOrientation: automatic)
+                if let selectedConfiguration {
+                    return try WatermarkService.previewData(photo: photo,
+                                                            configuration: selectedConfiguration,
+                                                            sourcePath: sourcePath)
+                }
+                return try WatermarkService.previewData(photo: photo, preset: selectedPreset,
+                                                        sourcePath: sourcePath,
+                                                        matchOrientation: automatic)
             }.value
             guard !Task.isCancelled else { return }
             preview = NSImage(data: data)
