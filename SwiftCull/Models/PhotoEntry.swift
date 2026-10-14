@@ -70,6 +70,10 @@ struct PhotoEntry: Identifiable, Hashable, Sendable {
         jpgPath ?? nefPath ?? ""
     }
 
+    func watermarkSourcePath(preferRaw: Bool) -> String? {
+        preferRaw ? (nefPath ?? jpgPath) : (jpgPath ?? nefPath)
+    }
+
     var primaryFilePath: String {
         jpgPath ?? nefPath ?? movPath ?? ""
     }

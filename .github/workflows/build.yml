@@ -45,6 +45,9 @@ jobs:
             CODE_SIGN_STYLE=Automatic \
             build
 
+      - name: Watermark rendering smoke test
+        run: bash Tests/run-watermark-smoke.sh
+
       - name: Package DMG
         run: |
           APP_PATH="$RUNNER_TEMP/build/Release/SwiftCull.app"

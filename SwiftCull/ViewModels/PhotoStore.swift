@@ -968,4 +968,55 @@ class PhotoStore: ObservableObject {
             }
         }
     }
+
+    func exportWatermarkedPhotos(preset: WatermarkPreset, to directory: URL) {
+        let photosToExport = filteredPhotos.filter { $0.jpgPath != nil || $0.nefPath != nil }
+        guard !photosToExport.isEmpty, !isExporting else { return }
+        let preferRaw = filterOptions.fileTypeFilter == .nefOnly
+        isExporting = true
+        exportProgress = 0
+
+        Task.detached(priority: .utility) {
+            let fm = FileManager.default
+            var exported = 0
+            var failures: [String] = []
+            for (index, photo) in photosToExport.enumerated() {
+                do {
+                    guard let sourcePath = photo.watermarkSourcePath(preferRaw: preferRaw) else {
+                        throw WatermarkError.unreadableImage
+                    }
+                    let data = try WatermarkService.jpegData(photo: photo, preset: preset, sourcePath: sourcePath)
+                    let source = URL(fileURLWithPath: sourcePath)
+                    let name = source.deletingPathExtension().lastPathComponent + "_watermark"
+                    var destination = directory.appendingPathComponent(name).appendingPathExtension("jpg")
+                    var suffix = 2
+                    while fm.fileExists(atPath: destination.path) {
+                        destination = directory.appendingPathComponent("\(name)_\(suffix)").appendingPathExtension("jpg")
+                        suffix += 1
+                    }
+                    let temporary = directory.appendingPathComponent(".swiftcull-\(UUID().uuidString).tmp")
+                    try data.write(to: temporary, options: .atomic)
+                    defer { try? fm.removeItem(at: temporary) }
+                    try fm.moveItem(at: temporary, to: destination)
+                    exported += 1
+                } catch {
+                    failures.append("\(photo.displayName)：\(error.localizedDescription)")
+                }
+                let progress = Double(index + 1) / Double(photosToExport.count)
+                await MainActor.run { [weak self] in self?.exportProgress = progress }
+            }
+
+            let completed = exported
+            let firstFailure = failures.first
+            let failed = failures.count
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                self.isExporting = false
+                self.exportProgress = 0
+                self.exportMessage = failed == 0
+                    ? "已输出 \(completed) 张水印照片到 \(directory.path)"
+                    : "水印导出完成：\(completed) 张成功，\(failed) 张失败。首个错误：\(firstFailure ?? "未知错误")"
+            }
+        }
+    }
 }

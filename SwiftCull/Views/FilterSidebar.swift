@@ -2,6 +2,7 @@ import SwiftUI
 
 struct FilterSidebar: View {
     @EnvironmentObject var store: PhotoStore
+    @State private var showingWatermarkExport = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -29,6 +30,9 @@ struct FilterSidebar: View {
             }
         } message: {
             Text(store.exportMessage ?? "")
+        }
+        .sheet(isPresented: $showingWatermarkExport) {
+            WatermarkExportView(store: store)
         }
     }
 
@@ -490,6 +494,15 @@ struct FilterSidebar: View {
                     .buttonStyle(.plain)
                     .disabled(store.isExporting || store.photoCount == 0)
                     .animation(.smooth(duration: 0.2), value: store.isExporting)
+
+                    Button {
+                        showingWatermarkExport = true
+                    } label: {
+                        Label("加水印并导出…", systemImage: "photo.badge.plus")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(store.isExporting || !store.filteredPhotos.contains(where: { $0.hasJpg || $0.hasNef }))
                 }
             }
         }
