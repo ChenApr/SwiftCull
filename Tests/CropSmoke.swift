@@ -27,6 +27,39 @@ enum CropSmoke {
         precondition(CGImageDestinationFinalize(destination))
 
         let crop = CropRect(x: 0.5, y: 0, width: 0.5, height: 1)
+        precondition(CropAspectRatio.allCases.map(\.title) ==
+                     ["自由", "原始比例", "1:1", "3:2", "4:3", "16:9"])
+        let square = CropGeometry.fitted(.full, imageWidth: 1200, imageHeight: 800,
+                                         aspect: .square)
+        precondition(abs(square.width * 1200 - square.height * 800) < 0.001)
+        let resizedSquare = CropGeometry.resized(square, dx: -0.1, dy: 0,
+                                                 right: true, bottom: true,
+                                                 normalizedRatio: 800.0 / 1200)
+        precondition(abs(resizedSquare.width * 1200 - resizedSquare.height * 800) < 0.001)
+        precondition(CropAspectRatio.threeTwo.imageRatio(width: 800, height: 1200)! == 2.0 / 3)
+        let portraitWide = CropGeometry.fitted(.full, imageWidth: 800, imageHeight: 1200,
+                                               aspect: .sixteenNine)
+        precondition(abs((portraitWide.width * 800) / (portraitWide.height * 1200) - 9.0 / 16) < 0.001)
+        for (imageWidth, imageHeight) in [(1200, 800), (800, 1200)] {
+            for mode in CropAspectRatio.allCases where mode != .free {
+                let frame = CropGeometry.fitted(.full, imageWidth: imageWidth,
+                                                imageHeight: imageHeight, aspect: mode)
+                let normalizedRatio = mode.imageRatio(width: imageWidth, height: imageHeight)!
+                    * Double(imageHeight) / Double(imageWidth)
+                for right in [false, true] {
+                    for bottom in [false, true] {
+                        let edited = CropGeometry.resized(frame, dx: right ? -0.12 : 0.12,
+                                                          dy: bottom ? -0.08 : 0.08,
+                                                          right: right, bottom: bottom,
+                                                          normalizedRatio: normalizedRatio)
+                        precondition(edited.x >= 0 && edited.y >= 0 &&
+                                     edited.x + edited.width <= 1.000_001 &&
+                                     edited.y + edited.height <= 1.000_001)
+                        precondition(abs(edited.width / edited.height - normalizedRatio) < 0.001)
+                    }
+                }
+            }
+        }
         let now = Date()
         var photo = PhotoEntry(baseName: "test", jpgPath: original.path, nefPath: nil, movPath: nil,
                                jpgFileSize: nil, nefFileSize: nil, movFileSize: nil,
@@ -57,6 +90,8 @@ enum CropSmoke {
         precondition(CGImageDestinationFinalize(rotatedDestination))
         let oriented = try CropImageService.image(path: rotatedURL.path)
         precondition(oriented.width == 80 && oriented.height == 100)
+        let orientedDimensions = try CropImageService.orientedDimensions(path: rotatedURL.path)
+        precondition(orientedDimensions.width == 80 && orientedDimensions.height == 100)
         let orientedCrop = try CropImageService.image(path: rotatedURL.path,
                                                       crop: CropRect(x: 0, y: 0, width: 0.5, height: 1))
         precondition(orientedCrop.width == 40 && orientedCrop.height == 100)
@@ -84,10 +119,13 @@ enum CropSmoke {
         precondition(copyOutput != output)
         let versions: [String: [CropVersion]] = ["test": [
             CropVersion(id: nil, name: nil, crop: nil),
-            CropVersion(id: copy.versionID, name: copy.versionName, crop: crop)
+            CropVersion(id: copy.versionID, name: copy.versionName, crop: crop, aspect: .threeTwo)
         ]]
         try CropCatalog.save(versions, folder: root.path)
         precondition(CropCatalog.load(folder: root.path) == versions)
-        print("Crop smoke passed: image geometry, orientation, JPEG/TIFF output, original copy, version naming, persistence")
+        let legacy = "{\"id\":null,\"name\":null,\"crop\":null}".data(using: .utf8)!
+        let oldVersion = try JSONDecoder().decode(CropVersion.self, from: legacy)
+        precondition(oldVersion.aspect == nil)
+        print("Crop smoke passed: ratios, image geometry, orientation, JPEG/TIFF output, original copy, version naming, persistence")
     }
 }

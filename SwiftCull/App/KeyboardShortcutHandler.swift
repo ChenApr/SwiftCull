@@ -33,6 +33,12 @@ enum KeyboardShortcutHandler {
             return false
         }
 
+        // Let sheets and dialogs own their keys, including the crop editor's Space+drag gesture.
+        if NSApp.modalWindow != nil || NSApp.keyWindow?.isSheet == true ||
+           NSApp.keyWindow?.attachedSheet != nil {
+            return false
+        }
+
         if keyCode == 8, flags.contains(.command),
            !flags.contains(.control), !flags.contains(.option), !flags.contains(.shift),
            !isTextFieldFocused, NSApp.modalWindow == nil,

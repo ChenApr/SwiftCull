@@ -13,6 +13,17 @@ enum CropImageError: LocalizedError {
 }
 
 enum CropImageService {
+    static func orientedDimensions(path: String) throws -> (width: Int, height: Int) {
+        guard let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = properties[kCGImagePropertyPixelWidth] as? Int,
+              let height = properties[kCGImagePropertyPixelHeight] as? Int else {
+            throw CropImageError.unreadable
+        }
+        let orientation = properties[kCGImagePropertyOrientation] as? Int ?? 1
+        return (5...8).contains(orientation) ? (height, width) : (width, height)
+    }
+
     static func image(path: String, crop: CropRect? = nil, maxPixelSize: Int? = nil) throws -> CGImage {
         guard let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil) else {
             throw CropImageError.unreadable
