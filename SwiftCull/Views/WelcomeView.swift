@@ -104,7 +104,8 @@ struct ShortcutGuideView: View {
         ("Delete", "删除所选照片"),
         ("A", "全选当前筛选结果"),
         ("Esc", "退出多选 / 取消输入焦点"),
-        ("⌘O", "打开文件夹")
+        ("⌘O", "打开文件夹"),
+        ("⌘C", "复制所选照片的原文件，可在 Finder 中粘贴")
     ]
 
     var body: some View {
@@ -163,7 +164,10 @@ struct ToolbarInfoView: View {
 }
 
 struct PhotoSinglePreviewView: View {
+    @EnvironmentObject var store: PhotoStore
     let photo: PhotoEntry
+
+    @State private var watermarkSelection: WatermarkPhotoSelection?
 
     @State private var scale: CGFloat = 1
     @State private var steadyScale: CGFloat = 1
@@ -197,6 +201,15 @@ struct PhotoSinglePreviewView: View {
         }
         .overlay(alignment: .bottom) { infoBar }
         .overlay(alignment: .topTrailing) { zoomControls }
+        .contentShape(Rectangle())
+        .contextMenu {
+            PhotoContextMenu(store: store, photo: photo, useSelection: false) { photos in
+                watermarkSelection = WatermarkPhotoSelection(photos: photos)
+            }
+        }
+        .sheet(item: $watermarkSelection) { selection in
+            WatermarkExportView(store: store, photos: selection.photos)
+        }
         .safeAreaInset(edge: .top, spacing: 0) {
             VStack(spacing: 0) {
                 ShortcutHintBar()
