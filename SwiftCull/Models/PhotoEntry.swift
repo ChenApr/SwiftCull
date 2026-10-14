@@ -18,6 +18,7 @@ struct PhotoEntry: Identifiable, Hashable, Sendable {
     var versionID: UUID? = nil
     var versionName: String? = nil
     var cropRect: CropRect? = nil
+    var cropAspect: CropAspectRatio? = nil
 
     var sourceID: String { baseName }
     var isVersionCopy: Bool { versionID != nil }
@@ -51,6 +52,7 @@ struct PhotoEntry: Identifiable, Hashable, Sendable {
         copy.versionID = version.id
         copy.versionName = version.name
         copy.cropRect = version.crop
+        copy.cropAspect = version.aspect
         copy.id = version.id.map { "\(baseName)::\($0.uuidString)" } ?? baseName
         return copy
     }

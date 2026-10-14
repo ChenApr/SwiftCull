@@ -172,7 +172,8 @@ class PhotoStore: ObservableObject {
     }
 
     @discardableResult
-    func saveCrop(_ crop: CropRect?, for photo: PhotoEntry, createCopy: Bool, name: String) -> Bool {
+    func saveCrop(_ crop: CropRect?, aspect: CropAspectRatio, for photo: PhotoEntry,
+                  createCopy: Bool, name: String) -> Bool {
         guard !sourcePath.isEmpty else { return false }
         guard let source = photos.first(where: { $0.sourceID == photo.sourceID && $0.versionID == nil }) else { return false }
         let cleanCrop = crop?.normalized.isFull == true ? nil : crop?.normalized
@@ -181,10 +182,12 @@ class PhotoStore: ObservableObject {
         if createCopy {
             let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
             let defaultName = "裁剪 \(versions.filter { $0.id != nil }.count + 1)"
-            version = CropVersion(id: UUID(), name: trimmed.isEmpty ? defaultName : trimmed, crop: cleanCrop)
+            version = CropVersion(id: UUID(), name: trimmed.isEmpty ? defaultName : trimmed,
+                                  crop: cleanCrop, aspect: aspect)
             versions.append(version)
         } else {
-            version = CropVersion(id: photo.versionID, name: photo.versionName, crop: cleanCrop)
+            version = CropVersion(id: photo.versionID, name: photo.versionName,
+                                  crop: cleanCrop, aspect: aspect)
             if let index = versions.firstIndex(where: { $0.id == photo.versionID }) {
                 versions[index] = version
             } else {
@@ -467,7 +470,8 @@ class PhotoStore: ObservableObject {
                     fileDate: exifDate!,
                     modificationDate: photo.modificationDate
                 )
-                updated = updated.asVersion(CropVersion(id: photo.versionID, name: photo.versionName, crop: photo.cropRect))
+                updated = updated.asVersion(CropVersion(id: photo.versionID, name: photo.versionName,
+                                                        crop: photo.cropRect, aspect: photo.cropAspect))
                 updated.rating = photo.rating
                 updated.tags = photo.tags
                 updated.isDeleted = photo.isDeleted

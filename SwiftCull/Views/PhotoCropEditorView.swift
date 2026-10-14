@@ -7,7 +7,10 @@ struct PhotoCropEditorView: View {
     let photo: PhotoEntry
 
     @State private var image: NSImage?
+    @State private var fullWidth = 0
+    @State private var fullHeight = 0
     @State private var crop: CropRect = .full
+    @State private var aspect: CropAspectRatio = .free
     @State private var newVersionName = ""
     @State private var zoom: CGFloat = 1
     @State private var steadyZoom: CGFloat = 1
@@ -29,6 +32,24 @@ struct PhotoCropEditorView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             .padding(16)
+
+            Picker("裁剪比例", selection: Binding(
+                get: { aspect },
+                set: { selected in
+                    guard fullWidth > 0, fullHeight > 0 else { aspect = selected; return }
+                    crop = CropGeometry.fitted(crop, imageWidth: fullWidth,
+                                               imageHeight: fullHeight, aspect: selected)
+                    aspect = selected
+                }
+            )) {
+                ForEach(CropAspectRatio.allCases) { option in
+                    Text(option.title).tag(option)
+                }
+            }
+            .pickerStyle(.segmented)
+            .disabled(fullWidth == 0)
+            .padding(.horizontal, 16)
+            .padding(.bottom, 10)
 
             GeometryReader { geometry in
                 ZStack {
@@ -58,7 +79,7 @@ struct PhotoCropEditorView: View {
             .frame(minWidth: 700, minHeight: 480)
 
             HStack(spacing: 12) {
-                Button("恢复原片") { crop = .full }
+                Button("恢复原片") { crop = .full; aspect = .free }
                 Spacer()
                 TextField("新版本名称（可选）", text: $newVersionName)
                     .textFieldStyle(.roundedBorder)
@@ -75,6 +96,7 @@ struct PhotoCropEditorView: View {
         .frame(minWidth: 760, minHeight: 570)
         .onAppear {
             crop = photo.cropRect ?? .full
+            aspect = photo.cropAspect ?? .free
             newVersionName = "裁剪 \(store.versions(for: photo).count)"
             keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp]) { event in
                 if event.keyCode == 49 {
@@ -88,17 +110,23 @@ struct PhotoCropEditorView: View {
         .onDisappear { if let keyMonitor { NSEvent.removeMonitor(keyMonitor) } }
         .task(id: photo.id) {
             let path = photo.primaryImagePath
-            let result = await Task.detached(priority: .userInitiated) {
-                try? CropImageService.image(path: path, maxPixelSize: 2400)
+            let result = await Task.detached(priority: .userInitiated) { () -> (CGImage, Int, Int)? in
+                guard let dimensions = try? CropImageService.orientedDimensions(path: path),
+                      let image = try? CropImageService.image(path: path, maxPixelSize: 2400) else {
+                    return nil
+                }
+                return (image, dimensions.width, dimensions.height)
             }.value
             if let result, !Task.isCancelled {
-                image = NSImage(cgImage: result, size: NSSize(width: result.width, height: result.height))
+                image = NSImage(cgImage: result.0, size: NSSize(width: result.0.width, height: result.0.height))
+                fullWidth = result.1
+                fullHeight = result.2
             }
         }
     }
 
     private func save(createCopy: Bool) {
-        if store.saveCrop(crop.isFull ? nil : crop, for: photo,
+        if store.saveCrop(crop.isFull ? nil : crop, aspect: aspect, for: photo,
                           createCopy: createCopy, name: newVersionName) {
             dismiss()
         }
@@ -169,6 +197,18 @@ struct PhotoCropEditorView: View {
                 }
                 let dx = Double(value.translation.width / max(1, frame.width))
                 let dy = Double(value.translation.height / max(1, frame.height))
+                if dragMode != .move {
+                    let right = dragMode == .topRight || dragMode == .bottomRight
+                    let bottom = dragMode == .bottomLeft || dragMode == .bottomRight
+                    let ratio = fullWidth > 0 && fullHeight > 0
+                        ? aspect.imageRatio(width: fullWidth, height: fullHeight)
+                            .map { $0 * Double(fullHeight) / Double(fullWidth) }
+                        : nil
+                    crop = CropGeometry.resized(start, dx: dx, dy: dy,
+                                                right: right, bottom: bottom,
+                                                normalizedRatio: ratio)
+                    return
+                }
                 var left = start.x, right = start.x + start.width
                 var top = start.y, bottom = start.y + start.height
                 switch dragMode {
@@ -176,19 +216,7 @@ struct PhotoCropEditorView: View {
                     left = min(max(0, start.x + dx), 1 - start.width)
                     top = min(max(0, start.y + dy), 1 - start.height)
                     right = left + start.width; bottom = top + start.height
-                case .topLeft:
-                    left = min(max(0, start.x + dx), right - 0.02)
-                    top = min(max(0, start.y + dy), bottom - 0.02)
-                case .topRight:
-                    right = max(min(1, start.x + start.width + dx), left + 0.02)
-                    top = min(max(0, start.y + dy), bottom - 0.02)
-                case .bottomLeft:
-                    left = min(max(0, start.x + dx), right - 0.02)
-                    bottom = max(min(1, start.y + start.height + dy), top + 0.02)
-                case .bottomRight:
-                    right = max(min(1, start.x + start.width + dx), left + 0.02)
-                    bottom = max(min(1, start.y + start.height + dy), top + 0.02)
-                case .pan: break
+                case .topLeft, .topRight, .bottomLeft, .bottomRight, .pan: break
                 }
                 crop = CropRect(x: left, y: top, width: right - left, height: bottom - top)
             }
