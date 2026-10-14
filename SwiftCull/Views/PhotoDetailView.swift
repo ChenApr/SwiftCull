@@ -332,6 +332,7 @@ struct PhotoDetailView: View {
                             actionLabel("裁剪 / 编辑版本…", systemImage: "crop.rotate")
                         }
                         .buttonStyle(InspectorActionButtonStyle())
+                        .help("裁剪 / 编辑版本 (C)")
                     }
                     Button {
                         NSWorkspace.shared.activateFileViewerSelecting(allFiles)

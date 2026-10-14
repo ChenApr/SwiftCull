@@ -125,6 +125,9 @@ enum KeyboardShortcutHandler {
             case "e":
                 store.toggleSinglePreview()
                 return true
+            case "c":
+                guard flags.isDisjoint(with: [.shift, .function]) else { return false }
+                return store.editSelectedCrop()
             case "q":
                 if store.isSelectMode {
                     store.confirmSelectMode()
