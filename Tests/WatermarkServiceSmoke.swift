@@ -117,6 +117,32 @@ struct WatermarkServiceSmoke {
             let customExport = try WatermarkService.export(photo: photo, configuration: custom,
                                                             sourcePath: input.path, to: outputDirectory)
             precondition(FileManager.default.fileExists(atPath: customExport.path))
+
+            if width > height {
+                var first = WatermarkReviewItem(photo: photo, sourcePath: input.path)
+                first.choice = .builtIn(.blur)
+                var second = WatermarkReviewItem(photo: photo, sourcePath: input.path)
+                second.include = false
+                second.choice = .custom(custom.id)
+                var requests = try WatermarkReviewPlan.requests(from: [first, second],
+                                                                 configurations: [custom])
+                precondition(requests.count == 1)
+                guard case .preset(.blur) = requests[0].style else {
+                    fatalError("Per-photo preset was lost")
+                }
+                second.include = true
+                second.matchOrientation = false
+                requests = try WatermarkReviewPlan.requests(from: [first, second],
+                                                            configurations: [custom])
+                precondition(requests.count == 2 && !requests[1].matchOrientation)
+                guard case .custom(let saved) = requests[1].style, saved.id == custom.id else {
+                    fatalError("Per-photo custom preset was lost")
+                }
+                second.choice = .custom(UUID())
+                precondition((try? WatermarkReviewPlan.requests(from: [first, second],
+                                                                configurations: [custom])) == nil,
+                             "Deleted custom preset should block export")
+            }
         }
         let presetsDirectory = directory.appendingPathComponent("saved-presets")
         try await MainActor.run {

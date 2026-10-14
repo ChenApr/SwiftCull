@@ -78,11 +78,60 @@ enum WatermarkPreset: String, CaseIterable, Identifiable, Codable, Sendable {
 enum WatermarkError: LocalizedError {
     case unreadableImage
     case encodingFailed
+    case missingPreset
 
     var errorDescription: String? {
         switch self {
         case .unreadableImage: return "无法读取照片图像"
         case .encodingFailed: return "无法生成 JPEG"
+        case .missingPreset: return "有自定义预设已被删除，请重新选择"
+        }
+    }
+}
+
+enum WatermarkExportChoice: Hashable, Sendable {
+    case builtIn(WatermarkPreset)
+    case custom(UUID)
+}
+
+struct WatermarkReviewItem: Identifiable, Sendable {
+    let photo: PhotoEntry
+    let sourcePath: String
+    var include = true
+    var choice: WatermarkExportChoice = .builtIn(.standard)
+    var matchOrientation = true
+    var id: String { photo.id }
+}
+
+/// Immutable choices captured from the review sheet so preview and export use the same settings.
+enum WatermarkExportStyle: Sendable {
+    case preset(WatermarkPreset)
+    case custom(WatermarkConfiguration)
+}
+
+struct WatermarkExportRequest: Sendable {
+    let photo: PhotoEntry
+    let sourcePath: String
+    let style: WatermarkExportStyle
+    let matchOrientation: Bool
+}
+
+enum WatermarkReviewPlan {
+    static func requests(from items: [WatermarkReviewItem],
+                         configurations: [WatermarkConfiguration]) throws -> [WatermarkExportRequest] {
+        try items.filter(\.include).map { item in
+            let style: WatermarkExportStyle
+            switch item.choice {
+            case .builtIn(let preset):
+                style = .preset(preset)
+            case .custom(let id):
+                guard let configuration = configurations.first(where: { $0.id == id }) else {
+                    throw WatermarkError.missingPreset
+                }
+                style = .custom(configuration)
+            }
+            return WatermarkExportRequest(photo: item.photo, sourcePath: item.sourcePath,
+                                          style: style, matchOrientation: item.matchOrientation)
         }
     }
 }

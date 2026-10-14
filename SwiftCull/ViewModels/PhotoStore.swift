@@ -969,35 +969,30 @@ class PhotoStore: ObservableObject {
         }
     }
 
-    func exportWatermarkedPhotos(preset: WatermarkPreset, configuration: WatermarkConfiguration? = nil,
-                                 matchOrientation: Bool, to directory: URL) {
-        let photosToExport = filteredPhotos.filter { $0.jpgPath != nil || $0.nefPath != nil }
-        guard !photosToExport.isEmpty, !isExporting else { return }
-        let preferRaw = filterOptions.fileTypeFilter == .nefOnly
+    func exportWatermarkedPhotos(_ requests: [WatermarkExportRequest], to directory: URL) {
+        guard !requests.isEmpty, !isExporting else { return }
         isExporting = true
         exportProgress = 0
 
         Task.detached(priority: .utility) {
             var exported = 0
             var failures: [String] = []
-            for (index, photo) in photosToExport.enumerated() {
+            for (index, request) in requests.enumerated() {
                 do {
-                    guard let sourcePath = photo.watermarkSourcePath(preferRaw: preferRaw) else {
-                        throw WatermarkError.unreadableImage
-                    }
-                    if let configuration {
-                        try WatermarkService.export(photo: photo, configuration: configuration,
-                                                    sourcePath: sourcePath, to: directory)
-                    } else {
-                        try WatermarkService.export(photo: photo, preset: preset,
-                                                    sourcePath: sourcePath,
-                                                    matchOrientation: matchOrientation, to: directory)
+                    switch request.style {
+                    case .custom(let configuration):
+                        try WatermarkService.export(photo: request.photo, configuration: configuration,
+                                                    sourcePath: request.sourcePath, to: directory)
+                    case .preset(let preset):
+                        try WatermarkService.export(photo: request.photo, preset: preset,
+                                                    sourcePath: request.sourcePath,
+                                                    matchOrientation: request.matchOrientation, to: directory)
                     }
                     exported += 1
                 } catch {
-                    failures.append("\(photo.displayName)：\(error.localizedDescription)")
+                    failures.append("\(request.photo.displayName)：\(error.localizedDescription)")
                 }
-                let progress = Double(index + 1) / Double(photosToExport.count)
+                let progress = Double(index + 1) / Double(requests.count)
                 await MainActor.run { [weak self] in self?.exportProgress = progress }
             }
 
@@ -1014,4 +1009,5 @@ class PhotoStore: ObservableObject {
             }
         }
     }
+
 }
