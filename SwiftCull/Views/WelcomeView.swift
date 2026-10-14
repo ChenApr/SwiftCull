@@ -104,7 +104,8 @@ struct ShortcutGuideView: View {
         ("Delete", "删除所选照片"),
         ("A", "全选当前筛选结果"),
         ("Esc", "退出多选 / 取消输入焦点"),
-        ("⌘O", "打开文件夹")
+        ("⌘O", "打开文件夹"),
+        ("⌘C", "复制所选照片的原文件，可在 Finder 中粘贴")
     ]
 
     var body: some View {

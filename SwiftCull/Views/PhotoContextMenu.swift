@@ -12,6 +12,10 @@ struct PhotoContextMenu: View {
             .compactMap { $0.map { URL(fileURLWithPath: $0) } }
     }
 
+    private var copyCount: Int {
+        store.photosToCopy(clicked: photo).count
+    }
+
     var body: some View {
         Menu {
             Button {
@@ -50,6 +54,14 @@ struct PhotoContextMenu: View {
         }
 
         Divider()
+
+        Button {
+            store.copyOriginalFiles(clicked: photo)
+        } label: {
+            Label(copyCount > 1 ? "复制所选原文件（\(copyCount) 张）" : "复制原文件（所有格式）",
+                  systemImage: "document.on.document")
+        }
+        .disabled(sourceFiles.isEmpty)
 
         Button {
             NSWorkspace.shared.activateFileViewerSelecting(sourceFiles)
