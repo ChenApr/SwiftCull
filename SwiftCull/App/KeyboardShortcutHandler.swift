@@ -15,7 +15,7 @@ enum KeyboardShortcutHandler {
             let chars = event.charactersIgnoringModifiers?.lowercased()
 
             let consumed = MainActor.assumeIsolated {
-                handleKey(keyCode: keyCode, hasCommandModifier: hasCommandModifier, chars: chars, store: store)
+                handleKey(keyCode: keyCode, flags: flags, hasCommandModifier: hasCommandModifier, chars: chars, store: store)
             }
             return consumed ? nil : event
         }
@@ -23,13 +23,21 @@ enum KeyboardShortcutHandler {
 
     /// 返回 true 表示事件被消费（吞掉），false 表示放行
     @MainActor
-    private static func handleKey(keyCode: UInt16, hasCommandModifier: Bool, chars: String?, store: PhotoStore) -> Bool {
+    private static func handleKey(keyCode: UInt16, flags: NSEvent.ModifierFlags,
+                                  hasCommandModifier: Bool, chars: String?, store: PhotoStore) -> Bool {
         if isQuickLookVisible {
             if keyCode == 49 {
                 QuickLookHelper.shared.closePanel()
                 return true
             }
             return false
+        }
+
+        if keyCode == 8, flags.contains(.command),
+           !flags.contains(.control), !flags.contains(.option), !flags.contains(.shift),
+           !isTextFieldFocused, NSApp.modalWindow == nil,
+           NSApp.keyWindow?.isSheet != true, NSApp.keyWindow?.attachedSheet == nil {
+            return store.copyOriginalFiles()
         }
 
         switch keyCode {

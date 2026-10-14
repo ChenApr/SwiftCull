@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import Combine
+import AppKit
 
 struct DetectedVolume: Identifiable, Sendable {
     let id = UUID()
@@ -113,6 +114,33 @@ class PhotoStore: ObservableObject {
     }
 
     var selectedCount: Int { selectedPhotos.count }
+
+    /// Right-clicking a selected card copies the whole selection; otherwise it copies that card.
+    func photosToCopy(clicked photo: PhotoEntry? = nil) -> [PhotoEntry] {
+        if let photo {
+            if selectedPhotos.count > 1, selectedPhotos.contains(photo.id) {
+                return selectedPhotoEntries
+            }
+            return [photo]
+        }
+        if viewMode == .grid, selectedPhotos.count > 1 {
+            return selectedPhotoEntries
+        }
+        return selectedPhoto.map { [$0] } ?? []
+    }
+
+    @discardableResult
+    func copyOriginalFiles(clicked photo: PhotoEntry? = nil) -> Bool {
+        let paths = photosToCopy(clicked: photo).flatMap { entry in
+            [entry.jpgPath, entry.nefPath, entry.movPath].compactMap { $0 }
+        }
+        let urls = paths.filter { FileManager.default.fileExists(atPath: $0) }
+            .map { URL(fileURLWithPath: $0) as NSURL }
+        guard !urls.isEmpty else { return false }
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        return pasteboard.writeObjects(urls)
+    }
 
     var availableTags: [FinderTag] {
         finderTagService.availableTags
