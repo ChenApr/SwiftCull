@@ -20,6 +20,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.swiftcull.app
+        MARKETING_VERSION: "0.2.0"
+        CURRENT_PROJECT_VERSION: "2"
         INFOPLIST_KEY_CFBundleDisplayName: "SwiftCull"
         INFOPLIST_KEY_LSApplicationCategoryType: "public.app-category.photography"
         CODE_SIGN_ENTITLEMENTS: SwiftCull/SwiftCull.entitlements
