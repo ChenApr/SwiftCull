@@ -31,12 +31,14 @@ enum SemiWatermarkRenderer {
         let metadata = Metadata(path: path, source: source, fallbackDate: photo.fileDate)
         let selected = preset.resolved(isPortrait: image.height > image.width,
                                        matchOrientation: matchOrientation)
+        let effectiveConfiguration = configuration?.adapted(to: selected)
         switch selected.layout {
         case .standard, .card, .nikonCard, .centerBrand:
-            return try bordered(image, metadata: metadata, preset: selected, configuration: configuration)
+            return try bordered(image, metadata: metadata, preset: selected,
+                                configuration: effectiveConfiguration)
         case .blur, .nikonBlur:
             return try blurred(image, metadata: metadata, nikon: selected.layout == .nikonBlur,
-                               configuration: configuration)
+                               configuration: effectiveConfiguration)
         case .cornerParameters:
             return try overlay(image) { canvas in
                 let short = CGFloat(min(image.width, image.height))
@@ -44,10 +46,10 @@ enum SemiWatermarkRenderer {
                 let inset = CGFloat(image.height) * 0.05
                 drawSlot(.overlayParameters, defaultText: metadata.parameters,
                          defaultPosition: .bottomRight, baselinePercent: 3,
-                         image: image, canvas: canvas, metadata: metadata, configuration: configuration,
+                         image: image, canvas: canvas, metadata: metadata, configuration: effectiveConfiguration,
                          x: canvas.width - inset, bottom: inset, height: height,
                          color: .white, weight: .bold, alignment: .right, maxWidth: canvas.width * 0.9)
-                drawExtras(configuration, metadata: metadata, image: image, canvas: canvas,
+                drawExtras(effectiveConfiguration, metadata: metadata, image: image, canvas: canvas,
                            photoRect: canvas, footer: 0)
             }
         case .folderAndDate:
@@ -56,12 +58,12 @@ enum SemiWatermarkRenderer {
                 let height = selected.isPortraitPreset ? short * 0.03 : CGFloat(image.height) * 0.03
                 drawSlot(.overlayFolderDate, defaultText: "\(metadata.folder)    \(metadata.date)",
                          defaultPosition: .bottomRight, baselinePercent: 3,
-                         image: image, canvas: canvas, metadata: metadata, configuration: configuration,
+                         image: image, canvas: canvas, metadata: metadata, configuration: effectiveConfiguration,
                          x: canvas.width * 0.93, bottom: canvas.height * 0.02, height: height,
                          color: NSColor(calibratedRed: 232 / 255, green: 141 / 255,
                                         blue: 52 / 255, alpha: 1), weight: .regular,
                          alignment: .right, maxWidth: canvas.width * 0.85)
-                drawExtras(configuration, metadata: metadata, image: image, canvas: canvas,
+                drawExtras(effectiveConfiguration, metadata: metadata, image: image, canvas: canvas,
                            photoRect: canvas, footer: 0)
             }
         }

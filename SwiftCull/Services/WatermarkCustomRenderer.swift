@@ -7,7 +7,8 @@ enum WatermarkCustomRenderer {
                        sourcePath: String? = nil, maxPixelSize: Int? = nil) throws -> NSBitmapImageRep {
         if configuration.templateLayout == true {
             return try SemiWatermarkRenderer.render(photo: photo, preset: configuration.basePreset,
-                                                    sourcePath: sourcePath, matchOrientation: false,
+                                                    sourcePath: sourcePath,
+                                                    matchOrientation: configuration.matchOrientation == true,
                                                     maxPixelSize: maxPixelSize, configuration: configuration)
         }
         guard let path = sourcePath ?? photo.watermarkSourcePath(preferRaw: false),

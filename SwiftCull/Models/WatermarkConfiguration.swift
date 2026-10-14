@@ -14,6 +14,8 @@ struct WatermarkConfiguration: Codable, Hashable, Identifiable, Sendable {
     var components: [WatermarkComponent]
     /// New drafts retain the geometry of their semi-utils template. Nil keeps older saved presets compatible.
     var templateLayout: Bool?
+    /// Preserves the built-in preset's automatic landscape/portrait choice after saving.
+    var matchOrientation: Bool?
 
     enum Background: String, Codable, CaseIterable, Identifiable, Sendable {
         case solid = "纯色"
@@ -69,6 +71,41 @@ struct WatermarkConfiguration: Codable, Hashable, Identifiable, Sendable {
             ]
         }
         return configuration
+    }
+
+    /// Apply edits relative to the starting template when a photo needs the other orientation.
+    /// Unchanged controls take that orientation's exact built-in defaults.
+    func adapted(to preset: WatermarkPreset) -> WatermarkConfiguration {
+        guard templateLayout == true, preset != basePreset else { return self }
+        let original = Self.draft(from: basePreset)
+        var adapted = Self.draft(from: preset)
+        adapted.id = id
+        adapted.name = name
+        adapted.matchOrientation = matchOrientation
+        adapted.paddingPercent = paddingPercent
+        adapted.footerPercent = footerPercent
+        adapted.cornerRadiusPercent = cornerRadiusPercent
+        if background != original.background { adapted.background = background }
+        if backgroundHex != original.backgroundHex { adapted.backgroundHex = backgroundHex }
+        if shadow != original.shadow { adapted.shadow = shadow }
+
+        adapted.components = adapted.components.compactMap { target in
+            guard let slot = target.slot,
+                  let source = components.first(where: { $0.slot == slot }),
+                  let baseline = original.components.first(where: { $0.slot == slot }) else { return nil }
+            var result = target
+            result.id = source.id
+            if source.kind != baseline.kind { result.kind = source.kind }
+            if source.position != baseline.position { result.position = source.position }
+            result.fontPercent = target.fontPercent * source.fontPercent / baseline.fontPercent
+            if source.colorHex != baseline.colorHex { result.colorHex = source.colorHex }
+            if source.bold != baseline.bold { result.bold = source.bold }
+            if source.text != baseline.text { result.text = source.text }
+            result.imageData = source.imageData
+            return result
+        }
+        adapted.components.append(contentsOf: components.filter { $0.slot == nil })
+        return adapted
     }
 }
 

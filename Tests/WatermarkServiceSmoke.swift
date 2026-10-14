@@ -38,6 +38,7 @@ struct WatermarkServiceSmoke {
                 jpgFileSize: Int64(original.count), nefFileSize: nil, movFileSize: nil,
                 fileDate: Date(), modificationDate: Date()
             )
+            let roundtripDirectory = directory.appendingPathComponent("roundtrip-\(width)x\(height)")
             if width > height {
                 let nikonInput = directory.appendingPathComponent("synthetic-nikon.jpg")
                 guard let destination = CGImageDestinationCreateWithURL(
@@ -103,6 +104,48 @@ struct WatermarkServiceSmoke {
                 }
                 if [.blur, .nikonBlur].contains(preset.layout) {
                     precondition(image.pixelsWide == Int(Double(width) * 1.35))
+                }
+                var matchedDraft = draft
+                matchedDraft.matchOrientation = true
+                let saved = try await MainActor.run {
+                    let store = WatermarkPresetStore(directory: roundtripDirectory)
+                    try store.save(matchedDraft)
+                    return WatermarkPresetStore(directory: roundtripDirectory)
+                        .configurations.first { $0.id == matchedDraft.id }!
+                }
+                let builtInPreview = try WatermarkService.previewData(photo: photo, preset: preset,
+                                                                       matchOrientation: true)
+                let savedPreview = try WatermarkService.previewData(photo: photo,
+                                                                     configuration: saved)
+                precondition(savedPreview == builtInPreview,
+                             "Saved preview differs from \(preset.rawValue)")
+                let editingPreset = preset.resolved(isPortrait: height > width, matchOrientation: true)
+                let reopenedDraft = saved.adapted(to: editingPreset)
+                let reopenedPreview = try WatermarkService.previewData(photo: photo,
+                                                                        configuration: reopenedDraft)
+                precondition(reopenedPreview == builtInPreview,
+                             "Reopened editor preview differs from \(preset.rawValue)")
+                let savedAgain = try await MainActor.run {
+                    let store = WatermarkPresetStore(directory: roundtripDirectory)
+                    try store.save(reopenedDraft)
+                    return WatermarkPresetStore(directory: roundtripDirectory)
+                        .configurations.first { $0.id == reopenedDraft.id }!
+                }
+                let resavedPreview = try WatermarkService.previewData(photo: photo,
+                                                                       configuration: savedAgain)
+                precondition(resavedPreview == builtInPreview,
+                             "Resaved preview differs from \(preset.rawValue)")
+                let builtInExport = try WatermarkService.jpegData(photo: photo, preset: preset,
+                                                                   matchOrientation: true)
+                let savedExport = try WatermarkService.jpegData(photo: photo, configuration: savedAgain)
+                precondition(savedExport == builtInExport,
+                             "Saved export differs from \(preset.rawValue)")
+                if preset == .standard {
+                    let output = try WatermarkService.export(photo: photo, configuration: savedAgain,
+                                                             sourcePath: input.path, to: roundtripDirectory)
+                    let outputData = try Data(contentsOf: output)
+                    precondition(outputData == builtInExport,
+                                 "Saved preset export file differs from the built-in preset")
                 }
             }
             let automatic = try WatermarkService.render(photo: photo, preset: .standard,
@@ -205,6 +248,20 @@ struct WatermarkServiceSmoke {
                                                                   sourcePath: path, maxPixelSize: 1200)
                 precondition(editing.tiffRepresentation == builtIn.tiffRepresentation,
                              "Real photo editor rendering differs from \(preset.rawValue)")
+                var draft = WatermarkConfiguration.draft(from: preset)
+                draft.matchOrientation = true
+                let saved = try await MainActor.run {
+                    let store = WatermarkPresetStore(directory: directory.appendingPathComponent("real-sample-presets"))
+                    try store.save(draft)
+                    return WatermarkPresetStore(directory: store.directory)
+                        .configurations.first { $0.id == draft.id }!
+                }
+                let builtInPreview = try WatermarkService.previewData(photo: sample, preset: preset,
+                                                                       sourcePath: path, matchOrientation: true)
+                let savedPreview = try WatermarkService.previewData(photo: sample,
+                                                                     configuration: saved, sourcePath: path)
+                precondition(savedPreview == builtInPreview,
+                             "Real photo saved preview differs from \(preset.rawValue)")
             }
         }
         print("Watermark smoke test passed: 15 presets × landscape/portrait, Nikon logo, custom layout, persistence, JPEG export")

@@ -43,8 +43,9 @@ struct WatermarkExportView: View {
     }
 
     private var presetForEditor: WatermarkPreset {
-        guard let currentItem, case .builtIn = currentItem.choice,
-              currentItem.matchOrientation,
+        guard let currentItem,
+              currentConfiguration?.matchOrientation == true ||
+                (currentConfiguration == nil && currentItem.matchOrientation),
               let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: currentItem.sourcePath) as CFURL, nil),
               let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
                 kCGImageSourceCreateThumbnailFromImageAlways: true,
@@ -251,10 +252,15 @@ struct WatermarkExportView: View {
                     HStack {
                         Button("新建预设…") {
                             editingConfiguration = WatermarkConfiguration.draft(from: presetForEditor)
+                            editingConfiguration?.matchOrientation = currentConfiguration == nil
+                                ? currentItem?.matchOrientation : currentConfiguration?.matchOrientation
                         }
                         Button("编辑预设…") {
-                            editingConfiguration = currentConfiguration
+                            editingConfiguration = currentConfiguration?.adapted(to: presetForEditor)
                                 ?? WatermarkConfiguration.draft(from: presetForEditor)
+                            if currentConfiguration == nil {
+                                editingConfiguration?.matchOrientation = currentItem?.matchOrientation
+                            }
                         }
                     }
                     if currentConfiguration != nil {
