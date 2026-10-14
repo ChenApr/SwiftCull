@@ -10,8 +10,10 @@ swiftc -module-cache-path "$test_dir/module-cache" -o "$test_dir/watermark-smoke
   "$project_dir/SwiftCull/Models/PhotoExifInfo.swift" \
   "$project_dir/SwiftCull/Models/WatermarkConfiguration.swift" \
   "$project_dir/SwiftCull/Services/WatermarkCustomRenderer.swift" \
+  "$project_dir/SwiftCull/Services/SemiWatermarkRenderer.swift" \
   "$project_dir/SwiftCull/Services/WatermarkPresetStore.swift" \
   "$project_dir/SwiftCull/Services/WatermarkService.swift" \
   "$project_dir/Tests/WatermarkServiceSmoke.swift"
 
-"$test_dir/watermark-smoke"
+SWIFTCULL_WATERMARK_LOGOS_DIR="$project_dir/SwiftCull/Resources/WatermarkLogos" \
+  "$test_dir/watermark-smoke"

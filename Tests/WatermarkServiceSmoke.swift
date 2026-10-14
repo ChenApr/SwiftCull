@@ -38,6 +38,29 @@ struct WatermarkServiceSmoke {
                 jpgFileSize: Int64(original.count), nefFileSize: nil, movFileSize: nil,
                 fileDate: Date(), modificationDate: Date()
             )
+            if width > height {
+                let nikonInput = directory.appendingPathComponent("synthetic-nikon.jpg")
+                guard let destination = CGImageDestinationCreateWithURL(
+                    nikonInput as CFURL, "public.jpeg" as CFString, 1, nil
+                ), let image = bitmap.cgImage else { fatalError("Cannot create EXIF fixture") }
+                CGImageDestinationAddImage(destination, image, [
+                    kCGImagePropertyTIFFDictionary: [
+                        kCGImagePropertyTIFFMake: "NIKON CORPORATION",
+                        kCGImagePropertyTIFFModel: "NIKON Z50_2"
+                    ]
+                ] as CFDictionary)
+                precondition(CGImageDestinationFinalize(destination))
+                let branded = try WatermarkService.render(photo: photo, preset: .standard,
+                                                          sourcePath: nikonInput.path)
+                let hasYellowLogo = stride(from: 0, to: branded.pixelsWide, by: 4).contains { x in
+                    stride(from: 0, to: branded.pixelsHigh, by: 4).contains { y in
+                        guard let color = branded.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { return false }
+                        return color.redComponent > 0.9 && color.greenComponent > 0.6
+                            && color.blueComponent < 0.3
+                    }
+                }
+                precondition(hasYellowLogo, "Bundled Nikon logo was not rendered")
+            }
             for preset in WatermarkPreset.allCases {
                 let image = try WatermarkService.render(photo: photo, preset: preset)
                 let preview = try WatermarkService.previewData(photo: photo, preset: preset)
@@ -46,10 +69,13 @@ struct WatermarkServiceSmoke {
                 let exportedImage = CGImageSourceCreateImageAtIndex(exportedSource, 0, nil)!
                 precondition(!preview.isEmpty && exportedImage.width == image.pixelsWide)
                 precondition(exportedImage.height == image.pixelsHigh)
-                if [.standard, .card, .nikonCard, .centerBrand].contains(preset.layout) {
-                    precondition(image.pixelsHigh > height)
-                } else {
+                if [.cornerParameters, .folderAndDate].contains(preset.layout) {
                     precondition(image.pixelsHigh == height)
+                } else {
+                    precondition(image.pixelsHigh > height)
+                }
+                if [.blur, .nikonBlur].contains(preset.layout) {
+                    precondition(image.pixelsWide == Int(Double(width) * 1.35))
                 }
             }
             let automatic = try WatermarkService.render(photo: photo, preset: .standard,
@@ -108,6 +134,6 @@ struct WatermarkServiceSmoke {
             try reopened.delete(config.id)
             precondition(reopened.configurations.isEmpty)
         }
-        print("Watermark smoke test passed: 15 presets × landscape/portrait, custom layout, persistence, JPEG export")
+        print("Watermark smoke test passed: 15 presets × landscape/portrait, Nikon logo, custom layout, persistence, JPEG export")
     }
 }
