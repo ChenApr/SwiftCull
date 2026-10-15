@@ -351,8 +351,12 @@ struct PhotoDetailView: View {
                         .buttonStyle(InspectorActionButtonStyle())
                         .help(store.isVideoPlaybackMode && store.selectedPhoto?.id == photo.id
                               ? "退出播放 (V)" : "播放视频 (V)")
+                        Button { store.openLivePhotoEditor(for: photo) } label: {
+                            actionLabel("制作实况照片…", systemImage: "livephoto")
+                        }
+                        .buttonStyle(InspectorActionButtonStyle())
                     }
-                    if !photo.isVideoOnly {
+                    if !photo.hasMov {
                         Button { store.editCrop(photo) } label: {
                             actionLabel("裁剪 / 编辑版本…", systemImage: "crop.rotate")
                         }

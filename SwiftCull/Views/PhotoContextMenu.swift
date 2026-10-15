@@ -69,9 +69,12 @@ struct PhotoContextMenu: View {
                 Label(isCurrentPlayback ? "退出播放 (V)" : "播放视频 (V)",
                       systemImage: isCurrentPlayback ? "stop.circle" : "play.rectangle")
             }
+            Button { store.openLivePhotoEditor(for: photo) } label: {
+                Label("制作实况照片…", systemImage: "livephoto")
+            }
         }
 
-        if !isBatch && !photo.isVideoOnly {
+        if !isBatch && !photo.hasMov {
             Button { store.editCrop(photo) } label: {
                 Label("裁剪 / 编辑版本…", systemImage: "crop.rotate")
             }

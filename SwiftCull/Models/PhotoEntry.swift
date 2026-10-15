@@ -44,6 +44,10 @@ struct PhotoEntry: Identifiable, Hashable, Sendable {
     var hasNef: Bool { nefPath != nil }
     var hasMov: Bool { movPath != nil }
     var isVideoOnly: Bool { hasMov && !hasJpg && !hasNef }
+    var isLivePhoto: Bool {
+        guard hasMov, let jpgPath else { return false }
+        return ["heic", "heif"].contains(URL(fileURLWithPath: jpgPath).pathExtension.lowercased())
+    }
 
     var displayName: String { versionName ?? baseName }
 
@@ -97,12 +101,16 @@ struct PhotoEntry: Identifiable, Hashable, Sendable {
     }
 
     var fileTypeBadge: String {
+        if isLivePhoto { return "LIVE" }
         if hasMov && hasNef && hasJpg { return "RAW+JPG+MOV" }
         if hasMov && hasNef { return "RAW+MOV" }
         if hasMov && hasJpg { return "JPG+MOV" }
         if hasNef && hasJpg { return "RAW+JPG" }
         if hasNef { return "RAW" }
         if hasMov { return "MOV" }
+        if let jpgPath, ["heic", "heif"].contains(URL(fileURLWithPath: jpgPath).pathExtension.lowercased()) {
+            return "HEIC"
+        }
         return "JPG"
     }
 

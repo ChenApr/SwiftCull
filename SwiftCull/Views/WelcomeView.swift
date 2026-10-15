@@ -187,9 +187,10 @@ struct PhotoSinglePreviewView: View {
             background
 
             if store.isVideoPlaybackMode, photo.movPath != nil {
-                VideoPlaybackView(controller: store.videoPlaybackController, displayName: photo.displayName) {
-                    store.exitVideoPlaybackMode()
-                }
+                VideoPlaybackView(controller: store.videoPlaybackController,
+                                  displayName: photo.displayName,
+                                  onLivePhoto: { store.openLivePhotoEditor(for: photo) },
+                                  onExit: { store.exitVideoPlaybackMode() })
             } else {
                 GeometryReader { geo in
                     DetailThumbnailView(photo: photo, targetSize: 1800)
@@ -304,7 +305,7 @@ struct PhotoSinglePreviewView: View {
             }
             .disabled(scale >= maxScale)
 
-            if !photo.isVideoOnly {
+            if !photo.hasMov {
                 Divider().frame(height: 16)
                 Button { store.editCrop(photo) } label: {
                     Image(systemName: "crop.rotate")

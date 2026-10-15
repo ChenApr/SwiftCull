@@ -7,3 +7,8 @@ semi-utils 仓库以 Apache License 2.0 发布；许可全文随素材保存在
 
 内置水印预设的尺寸、布局与处理顺序参考该项目的 `config/templates` 和 `processor` 实现，
 由 SwiftCull 使用 macOS 原生框架重新实现。相机品牌名称与标志归各自权利人所有。
+
+实况照片的 HEIC/MOV 配对元数据写入方式参考并改编自
+[GavinHarbus/Video2Live](https://github.com/GavinHarbus/Video2Live) 的实现。
+原项目以 MIT License 发布；许可全文见
+`SwiftCull/Resources/LivePhoto/LICENSE.Video2Live`。
