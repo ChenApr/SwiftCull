@@ -54,7 +54,7 @@ final class FileService: @unchecked Sendable {
             return []
         }
 
-        let imageExtensions: Set<String> = ["jpg", "jpeg", "nef", "cr2", "arw", "dng", "raf", "tiff", "tif"]
+        let imageExtensions: Set<String> = ["jpg", "jpeg", "heic", "heif", "nef", "cr2", "arw", "dng", "raf", "tiff", "tif"]
         let videoExtensions: Set<String> = ["mov", "mp4", "avi"]
 
         // 按文件名分组；仅使用文件系统日期占位，EXIF 拍摄日期稍后在后台补充
@@ -74,7 +74,7 @@ final class FileService: @unchecked Sendable {
 
             var group = photoDict[baseName] ?? PhotoFileGroup()
             switch ext {
-            case "jpg", "jpeg", "tiff", "tif":
+            case "jpg", "jpeg", "heic", "heif", "tiff", "tif":
                 group.jpgPath = fileURL.path
                 group.jpgSize = fileSize
             case "nef", "cr2", "arw", "dng", "raf":

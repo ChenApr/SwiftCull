@@ -58,6 +58,9 @@ struct ContentView: View {
         .sheet(item: $store.cropEditorPhoto) { photo in
             PhotoCropEditorView(photo: photo).environmentObject(store)
         }
+        .sheet(item: $store.livePhotoEditorPhoto) { photo in
+            LivePhotoExportView(photo: photo, initialTime: store.livePhotoInitialTime)
+        }
         .task {
             store.detectVolumes()
             await store.loadPhotos()

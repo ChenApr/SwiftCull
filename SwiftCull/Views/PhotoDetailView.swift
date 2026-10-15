@@ -129,6 +129,20 @@ struct PhotoDetailView: View {
             HStack {
                 fileTypePill(photo)
                 Spacer()
+                if photo.movPath != nil {
+                    Button {
+                        store.toggleVideoPlaybackMode(for: photo)
+                    } label: {
+                        Label(store.isVideoPlaybackMode && store.selectedPhoto?.id == photo.id
+                              ? "退出播放" : "播放视频",
+                              systemImage: store.isVideoPlaybackMode && store.selectedPhoto?.id == photo.id
+                              ? "stop.circle" : "play.rectangle")
+                            .font(.caption2.weight(.semibold))
+                    }
+                    .buttonStyle(.plain)
+                    .help(store.isVideoPlaybackMode && store.selectedPhoto?.id == photo.id
+                          ? "退出播放 (V)" : "播放视频 (V)")
+                }
                 Button {
                     openQuickLook(photo)
                 } label: {
@@ -327,7 +341,22 @@ struct PhotoDetailView: View {
                     .compactMap { $0.map { URL(fileURLWithPath: $0) } }
 
                 if !allFiles.isEmpty {
-                    if !photo.isVideoOnly {
+                    if photo.movPath != nil {
+                        Button { store.toggleVideoPlaybackMode(for: photo) } label: {
+                            actionLabel(store.isVideoPlaybackMode && store.selectedPhoto?.id == photo.id
+                                        ? "退出播放" : "播放视频",
+                                        systemImage: store.isVideoPlaybackMode && store.selectedPhoto?.id == photo.id
+                                        ? "stop.circle" : "play.rectangle")
+                        }
+                        .buttonStyle(InspectorActionButtonStyle())
+                        .help(store.isVideoPlaybackMode && store.selectedPhoto?.id == photo.id
+                              ? "退出播放 (V)" : "播放视频 (V)")
+                        Button { store.openLivePhotoEditor(for: photo) } label: {
+                            actionLabel("制作实况照片…", systemImage: "livephoto")
+                        }
+                        .buttonStyle(InspectorActionButtonStyle())
+                    }
+                    if !photo.hasMov {
                         Button { store.editCrop(photo) } label: {
                             actionLabel("裁剪 / 编辑版本…", systemImage: "crop.rotate")
                         }

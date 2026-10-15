@@ -21,7 +21,11 @@ class PhotoStore: ObservableObject {
     @Published var filteredPhotos: [PhotoEntry] = []
     /// 每当 filteredPhotos 的成员或顺序变化时自增，供视图做轻量 onChange 触发（避免全量 map(\.id)）
     @Published private(set) var filteredPhotosVersion = 0
-    @Published var selectedPhoto: PhotoEntry?
+    @Published var selectedPhoto: PhotoEntry? {
+        didSet {
+            if oldValue?.id != selectedPhoto?.id { exitVideoPlaybackMode() }
+        }
+    }
     @Published var selectedPhotos: Set<String> = []
     @Published var filterOptions = FilterOptions()
     @Published var isLoading = false
@@ -37,12 +41,20 @@ class PhotoStore: ObservableObject {
     @Published var isExporting = false
     @Published var exportProgress: Double = 0
     @Published var exportMessage: String?
-    @Published var viewMode: PhotoViewMode = .grid
+    @Published var viewMode: PhotoViewMode = .grid {
+        didSet {
+            if viewMode != .single { exitVideoPlaybackMode() }
+        }
+    }
+    @Published private(set) var isVideoPlaybackMode = false
+    let videoPlaybackController = VideoPlaybackController()
     @Published var isSidebarVisible = true
     @Published var showingShortcutGuide = false
     @Published var isSelectMode = false
     @Published var detectedVolumes: [DetectedVolume] = []
     @Published var cropEditorPhoto: PhotoEntry?
+    @Published var livePhotoEditorPhoto: PhotoEntry?
+    @Published var livePhotoInitialTime: Double = 0
     @Published var expandedVersionSources: Set<String> = []
     private var cropVersions: [String: [CropVersion]] = [:]
 
@@ -121,7 +133,7 @@ class PhotoStore: ObservableObject {
 
     var canEditSelectedCrop: Bool {
         selectedPhotos.count == 1 && selectedPhoto.map {
-            selectedPhotos.contains($0.id) && !$0.isVideoOnly
+            selectedPhotos.contains($0.id) && !$0.hasMov
         } == true
     }
 
@@ -147,8 +159,16 @@ class PhotoStore: ObservableObject {
     }
 
     func editCrop(_ photo: PhotoEntry) {
-        guard !photo.isVideoOnly else { return }
+        guard !photo.hasMov else { return }
         cropEditorPhoto = photo
+    }
+
+    func openLivePhotoEditor(for photo: PhotoEntry) {
+        guard photo.movPath != nil else { return }
+        livePhotoInitialTime = isVideoPlaybackMode && selectedPhoto?.id == photo.id
+            ? videoPlaybackController.currentTime : 0
+        videoPlaybackController.player?.pause()
+        livePhotoEditorPhoto = photo
     }
 
     @discardableResult
@@ -187,7 +207,7 @@ class PhotoStore: ObservableObject {
     @discardableResult
     func saveCrop(_ crop: CropRect?, aspect: CropAspectRatio, for photo: PhotoEntry,
                   createCopy: Bool, name: String) -> Bool {
-        guard !sourcePath.isEmpty else { return false }
+        guard !sourcePath.isEmpty, !photo.hasMov else { return false }
         guard let source = photos.first(where: { $0.sourceID == photo.sourceID && $0.versionID == nil }) else { return false }
         let cleanCrop = crop?.normalized.isFull == true ? nil : crop?.normalized
         var versions = cropVersions[photo.sourceID] ?? [CropVersion(id: nil, name: nil, crop: nil)]
@@ -627,6 +647,42 @@ class PhotoStore: ObservableObject {
         if selectedPhoto != nil {
             viewMode = .single
         }
+    }
+
+    var canPlaySelectedVideo: Bool { selectedPhoto?.movPath != nil }
+
+    @discardableResult
+    func enterVideoPlaybackMode(for photo: PhotoEntry? = nil) -> Bool {
+        if let photo, selectedPhoto?.id != photo.id { selectPhoto(photo) }
+        guard let path = selectedPhoto?.movPath else { return false }
+        viewMode = .single
+        videoPlaybackController.load(URL(fileURLWithPath: path))
+        isVideoPlaybackMode = true
+        return true
+    }
+
+    @discardableResult
+    func toggleVideoPlaybackMode() -> Bool {
+        if isVideoPlaybackMode {
+            exitVideoPlaybackMode()
+            return true
+        }
+        return enterVideoPlaybackMode()
+    }
+
+    @discardableResult
+    func toggleVideoPlaybackMode(for photo: PhotoEntry) -> Bool {
+        if isVideoPlaybackMode, selectedPhoto?.id == photo.id {
+            exitVideoPlaybackMode()
+            return true
+        }
+        return enterVideoPlaybackMode(for: photo)
+    }
+
+    func exitVideoPlaybackMode() {
+        guard isVideoPlaybackMode else { return }
+        isVideoPlaybackMode = false
+        videoPlaybackController.stop()
     }
 
     func toggleSidebar() {
