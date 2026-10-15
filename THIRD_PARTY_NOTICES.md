@@ -12,3 +12,14 @@ semi-utils 仓库以 Apache License 2.0 发布；许可全文随素材保存在
 [GavinHarbus/Video2Live](https://github.com/GavinHarbus/Video2Live) 的实现。
 原项目以 MIT License 发布；许可全文见
 `SwiftCull/Resources/LivePhoto/LICENSE.Video2Live`。
+
+水印编辑器随应用打包的 Roboto、Merriweather、Noto Sans SC、Noto Serif SC、
+Allura、Caveat、Dancing Script、Great Vibes、Long Cang、Ma Shan Zheng、Pacifico、
+Parisienne、Sacramento 和 Zhi Mang Xing 来自
+[Google Fonts](https://github.com/google/fonts)，LXGW WenKai 来自
+[lxgw/LxgwWenKai](https://github.com/lxgw/LxgwWenKai)。这些字体按各自的
+SIL Open Font License 1.1 分发；各字体的许可和版权声明保存在
+`SwiftCull/Fonts/Licenses`。字体文件分别取自 Google Fonts 提交
+`954e256c4277419b5e48bffa51be069b2bd01bde` 和 LXGW WenKai 提交
+`a06dd23142e82758f23f792f4060bbf1613286e8`。Times New Roman 和 macOS 宋体仅调用用户本机已安装的字体，
+不随应用分发。
