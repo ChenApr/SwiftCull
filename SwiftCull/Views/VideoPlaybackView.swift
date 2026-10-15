@@ -7,38 +7,42 @@ struct VideoPlaybackView: View {
     let onExit: () -> Void
 
     var body: some View {
-        ZStack {
+        VStack(spacing: 0) {
+            playbackHeader
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(.bar)
+
             Color.black
-            if let player = controller.player {
-                NativeVideoPlayer(player: player)
-                    .padding(.horizontal, 24)
-                    .padding(.vertical, 20)
-            } else {
-                ProgressView()
-                    .tint(.white)
+                .overlay {
+                    if let player = controller.player {
+                        NativeVideoPlayer(player: player)
+                            .padding(.horizontal, 24)
+                            .padding(.vertical, 20)
+                    } else {
+                        ProgressView()
+                            .tint(.white)
+                    }
             }
         }
-        .overlay(alignment: .topLeading) {
-            HStack(spacing: 8) {
-                Image(systemName: "play.rectangle.fill")
-                Text(displayName)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Text("Space 播放/暂停 · ← → 跳转 · ⇧← ⇧→ 逐帧")
-                    .foregroundStyle(.secondary)
-            }
-            .font(.caption)
-            .padding(10)
-            .background(.bar, in: RoundedRectangle(cornerRadius: 8))
-            .padding(14)
-        }
-        .overlay(alignment: .topTrailing) {
+    }
+
+    private var playbackHeader: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "play.rectangle.fill")
+            Text(displayName)
+                .lineLimit(1)
+                .truncationMode(.middle)
+
+            Spacer(minLength: 8)
+
             Button(action: onExit) {
                 Label("退出播放模式", systemImage: "xmark")
             }
             .help("退出播放模式 (V / Esc)")
-            .padding(14)
         }
+        .font(.caption)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
     }
 }
 
