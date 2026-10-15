@@ -5,9 +5,13 @@ import ImageIO
 /// Native implementation of the bundled semi-utils layouts. Dimensions and placements follow
 /// the corresponding templates in semi-utils/config/templates (Apache-2.0).
 enum SemiWatermarkRenderer {
-    static func render(photo: PhotoEntry, preset: WatermarkPreset, sourcePath: String?,
-                       matchOrientation: Bool, maxPixelSize: Int?,
-                       configuration: WatermarkConfiguration? = nil) throws -> NSBitmapImageRep {
+    struct PreparedSource {
+        let image: CGImage
+        let metadata: Metadata
+    }
+
+    static func prepare(photo: PhotoEntry, sourcePath: String?,
+                        maxPixelSize: Int?) throws -> PreparedSource {
         guard let path = sourcePath ?? photo.watermarkSourcePath(preferRaw: false),
               let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil) else {
             throw WatermarkError.unreadableImage
@@ -29,6 +33,22 @@ enum SemiWatermarkRenderer {
             throw WatermarkError.unreadableImage
         }
         let metadata = Metadata(path: path, source: source, fallbackDate: photo.fileDate)
+        return PreparedSource(image: image, metadata: metadata)
+    }
+
+    static func render(photo: PhotoEntry, preset: WatermarkPreset, sourcePath: String?,
+                       matchOrientation: Bool, maxPixelSize: Int?,
+                       configuration: WatermarkConfiguration? = nil) throws -> NSBitmapImageRep {
+        let prepared = try prepare(photo: photo, sourcePath: sourcePath, maxPixelSize: maxPixelSize)
+        return try render(prepared: prepared, preset: preset, matchOrientation: matchOrientation,
+                          configuration: configuration)
+    }
+
+    static func render(prepared: PreparedSource, preset: WatermarkPreset,
+                       matchOrientation: Bool,
+                       configuration: WatermarkConfiguration? = nil) throws -> NSBitmapImageRep {
+        let image = prepared.image
+        let metadata = prepared.metadata
         let selected = preset.resolved(isPortrait: image.height > image.width,
                                        matchOrientation: matchOrientation)
         let effectiveConfiguration = configuration?.adapted(to: selected)
@@ -556,7 +576,7 @@ enum SemiWatermarkRenderer {
             .flatMap(NSImage.init(contentsOf:))
     }
 
-    private struct Metadata {
+    struct Metadata {
         let make: String
         let camera: String
         let lens: String
