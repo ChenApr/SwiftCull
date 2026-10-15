@@ -2,6 +2,11 @@ import AppKit
 import SwiftUI
 import ImageIO
 
+private struct CachedWatermarkBase: @unchecked Sendable {
+    // Rendering finishes before the bitmap is read by another task.
+    let canvas: SemiWatermarkRenderer.RenderedCanvas
+}
+
 struct WatermarkExportView: View {
     @ObservedObject var store: PhotoStore
     /// Nil reviews the filtered batch; a supplied array reviews only those photos.
@@ -13,8 +18,13 @@ struct WatermarkExportView: View {
     @State private var currentIndex = 0
     @State private var preview: NSImage?
     @State private var previewError: String?
+    @State private var previewPreparation: Task<WatermarkCustomRenderer.PreparedSource, Error>?
+    @State private var preparedPhotoID: String?
+    @State private var previewBase: Task<CachedWatermarkBase, Error>?
+    @State private var preparedBaseKey: String?
     @State private var outputDirectory: URL?
     @State private var editingConfiguration: WatermarkConfiguration?
+    @State private var editingOverlayID: UUID?
     @State private var deleteConfirmation = false
     @State private var presetError: String?
 
@@ -52,9 +62,18 @@ struct WatermarkExportView: View {
         return currentPreset.resolved(isPortrait: image.height > image.width, matchOrientation: true)
     }
 
-    private var previewKey: String {
+    private var primaryKey: String {
         guard let currentItem else { return "empty" }
         return "\(currentItem.id)|\(currentItem.choice)|\(currentItem.matchOrientation)|\(currentConfiguration?.hashValue ?? 0)"
+    }
+
+    private var previewKey: String {
+        guard let currentItem else { return "empty" }
+        let overlayKey = currentItem.overlays.map { layer in
+            let configurationHash = configuration(for: layer.choice)?.hashValue ?? 0
+            return "\(layer.id)|\(layer.choice)|\(layer.matchOrientation)|\(configurationHash)"
+        }.joined(separator: ";")
+        return "\(primaryKey)|\(overlayKey)"
     }
 
     private var choiceBinding: Binding<WatermarkExportChoice> {
@@ -106,8 +125,14 @@ struct WatermarkExportView: View {
                                       sourcePath: currentItem?.sourcePath) { updated in
                 try presetStore.save(updated)
                 if items.indices.contains(currentIndex) {
-                    items[currentIndex].choice = .custom(updated.id)
+                    if let editingOverlayID,
+                       let index = items[currentIndex].overlays.firstIndex(where: { $0.id == editingOverlayID }) {
+                        items[currentIndex].overlays[index].choice = .custom(updated.id)
+                    } else {
+                        items[currentIndex].choice = .custom(updated.id)
+                    }
                 }
+                editingOverlayID = nil
             }
         }
         .confirmationDialog("删除自定义预设？", isPresented: $deleteConfirmation) {
@@ -160,7 +185,8 @@ struct WatermarkExportView: View {
                         Text(item.photo.displayName)
                             .font(.caption.weight(.medium))
                             .lineLimit(1)
-                        Text(label(for: item.choice))
+                        Text(item.overlays.isEmpty ? label(for: item.choice)
+                             : "\(label(for: item.choice)) + \(item.overlays.count) 层")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
@@ -218,25 +244,7 @@ struct WatermarkExportView: View {
                     Text("当前照片").font(.headline)
                     Toggle("导出这张照片", isOn: includeBinding)
 
-                    Picker("水印预设", selection: choiceBinding) {
-                        Section("横拍模板") {
-                            ForEach(WatermarkPreset.landscapePresets) { preset in
-                                Text(preset.rawValue).tag(WatermarkExportChoice.builtIn(preset))
-                            }
-                        }
-                        Section("竖拍模板") {
-                            ForEach(WatermarkPreset.portraitPresets) { preset in
-                                Text(preset.rawValue).tag(WatermarkExportChoice.builtIn(preset))
-                            }
-                        }
-                        if !presetStore.configurations.isEmpty {
-                            Section("自定义预设") {
-                                ForEach(presetStore.configurations) { configuration in
-                                    Text(configuration.name).tag(WatermarkExportChoice.custom(configuration.id))
-                                }
-                            }
-                        }
-                    }
+                    Picker("基础预设", selection: choiceBinding) { presetChoices }
 
                     Toggle("按照片方向匹配", isOn: orientationBinding)
                         .disabled(currentConfiguration != nil)
@@ -244,16 +252,53 @@ struct WatermarkExportView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
 
-                    Button("将此预设应用到全部照片") { applyCurrentStyleToAll() }
+                    Divider()
+                    Text("叠加层").font(.headline)
+                    if let currentItem {
+                        ForEach(currentItem.overlays) { overlay in
+                            if let index = currentItem.overlays.firstIndex(where: { $0.id == overlay.id }) {
+                                overlayControls(overlay, index: index, count: currentItem.overlays.count)
+                            }
+                        }
+                    }
+                    Menu {
+                        Section("横拍模板") {
+                            ForEach(WatermarkPreset.landscapePresets) { preset in
+                                Button(preset.rawValue) { addOverlay(.builtIn(preset)) }
+                            }
+                        }
+                        Section("竖拍模板") {
+                            ForEach(WatermarkPreset.portraitPresets) { preset in
+                                Button(preset.rawValue) { addOverlay(.builtIn(preset)) }
+                            }
+                        }
+                        if !presetStore.configurations.isEmpty {
+                            Section("自定义预设") {
+                                ForEach(presetStore.configurations) { configuration in
+                                    Button(configuration.name) { addOverlay(.custom(configuration.id)) }
+                                }
+                            }
+                        }
+                    } label: {
+                        Label("添加叠加层", systemImage: "plus")
+                    }
+                    .disabled((currentItem?.overlays.count ?? 0) >= 8)
+                    Text("基础预设决定画布；叠加层绘制文字和 Logo。底栏内容需要基础预设带有底栏。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    Button("将这组水印应用到全部照片") { applyCurrentStyleToAll() }
                         .disabled(items.count < 2)
 
                     HStack {
                         Button("新建预设…") {
+                            editingOverlayID = nil
                             editingConfiguration = WatermarkConfiguration.draft(from: presetForEditor)
                             editingConfiguration?.matchOrientation = currentConfiguration == nil
                                 ? currentItem?.matchOrientation : currentConfiguration?.matchOrientation
                         }
                         Button("编辑预设…") {
+                            editingOverlayID = nil
                             editingConfiguration = currentConfiguration?.adapted(to: presetForEditor)
                                 ?? WatermarkConfiguration.draft(from: presetForEditor)
                             if currentConfiguration == nil {
@@ -282,6 +327,116 @@ struct WatermarkExportView: View {
                 .buttonStyle(.borderedProminent)
                 .disabled(outputDirectory == nil || selectedCount == 0 || store.isExporting)
         }
+    }
+
+    @ViewBuilder private var presetChoices: some View {
+        Section("横拍模板") {
+            ForEach(WatermarkPreset.landscapePresets) { preset in
+                Text(preset.rawValue).tag(WatermarkExportChoice.builtIn(preset))
+            }
+        }
+        Section("竖拍模板") {
+            ForEach(WatermarkPreset.portraitPresets) { preset in
+                Text(preset.rawValue).tag(WatermarkExportChoice.builtIn(preset))
+            }
+        }
+        if !presetStore.configurations.isEmpty {
+            Section("自定义预设") {
+                ForEach(presetStore.configurations) { configuration in
+                    Text(configuration.name).tag(WatermarkExportChoice.custom(configuration.id))
+                }
+            }
+        }
+    }
+
+    private func overlayControls(_ overlay: WatermarkOverlayChoice, index: Int, count: Int) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack {
+                Text("第 \(index + 2) 层").font(.caption.weight(.semibold))
+                Spacer()
+                Button { moveOverlay(overlay.id, by: -1) } label: { Image(systemName: "arrow.up") }
+                    .disabled(index == 0)
+                    .help("上移叠加层")
+                Button { moveOverlay(overlay.id, by: 1) } label: { Image(systemName: "arrow.down") }
+                    .disabled(index == count - 1)
+                    .help("下移叠加层")
+                Button(role: .destructive) { removeOverlay(overlay.id) } label: {
+                    Image(systemName: "trash")
+                }
+                .help("移除叠加层")
+            }
+            .buttonStyle(.borderless)
+            Picker("预设", selection: overlayChoiceBinding(overlay.id)) { presetChoices }
+            Toggle("按照片方向匹配", isOn: overlayOrientationBinding(overlay.id))
+                .disabled(configuration(for: overlay.choice) != nil)
+            Button("编辑此预设…") { editOverlay(overlay) }
+                .font(.caption)
+        }
+        .padding(8)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
+    }
+
+    private func configuration(for choice: WatermarkExportChoice) -> WatermarkConfiguration? {
+        guard case .custom(let id) = choice else { return nil }
+        return presetStore.configurations.first { $0.id == id }
+    }
+
+    private func overlayChoiceBinding(_ id: UUID) -> Binding<WatermarkExportChoice> {
+        Binding(get: {
+            currentItem?.overlays.first(where: { $0.id == id })?.choice ?? .builtIn(.standard)
+        }, set: { choice in
+            guard items.indices.contains(currentIndex),
+                  let index = items[currentIndex].overlays.firstIndex(where: { $0.id == id }) else { return }
+            items[currentIndex].overlays[index].choice = choice
+        })
+    }
+
+    private func overlayOrientationBinding(_ id: UUID) -> Binding<Bool> {
+        Binding(get: {
+            currentItem?.overlays.first(where: { $0.id == id })?.matchOrientation ?? true
+        }, set: { enabled in
+            guard items.indices.contains(currentIndex),
+                  let index = items[currentIndex].overlays.firstIndex(where: { $0.id == id }) else { return }
+            items[currentIndex].overlays[index].matchOrientation = enabled
+        })
+    }
+
+    private func addOverlay(_ choice: WatermarkExportChoice) {
+        guard items.indices.contains(currentIndex), items[currentIndex].overlays.count < 8 else { return }
+        items[currentIndex].overlays.append(WatermarkOverlayChoice(choice: choice))
+    }
+
+    private func removeOverlay(_ id: UUID) {
+        guard items.indices.contains(currentIndex) else { return }
+        items[currentIndex].overlays.removeAll { $0.id == id }
+    }
+
+    private func moveOverlay(_ id: UUID, by offset: Int) {
+        guard items.indices.contains(currentIndex),
+              let index = items[currentIndex].overlays.firstIndex(where: { $0.id == id }),
+              items[currentIndex].overlays.indices.contains(index + offset) else { return }
+        items[currentIndex].overlays.swapAt(index, index + offset)
+    }
+
+    private func editOverlay(_ overlay: WatermarkOverlayChoice) {
+        let saved = configuration(for: overlay.choice)
+        let preset: WatermarkPreset
+        switch overlay.choice {
+        case .builtIn(let selected): preset = selected
+        case .custom: preset = saved?.basePreset ?? .standard
+        }
+        let matchOrientation = saved?.matchOrientation ?? overlay.matchOrientation
+        let selected: WatermarkPreset
+        if matchOrientation, let currentItem,
+           let image = try? CropImageService.image(path: currentItem.sourcePath,
+                                                   crop: currentItem.photo.cropRect, maxPixelSize: 128) {
+            selected = preset.resolved(isPortrait: image.height > image.width, matchOrientation: true)
+        } else {
+            selected = preset
+        }
+        editingOverlayID = overlay.id
+        editingConfiguration = saved?.adapted(to: selected) ?? WatermarkConfiguration.draft(from: selected)
+        editingConfiguration?.matchOrientation = matchOrientation
     }
 
     private func prepareReview() {
@@ -315,6 +470,7 @@ struct WatermarkExportView: View {
         for index in items.indices {
             items[index].choice = currentItem.choice
             items[index].matchOrientation = currentItem.matchOrientation
+            items[index].overlays = currentItem.overlays
         }
     }
 
@@ -324,6 +480,9 @@ struct WatermarkExportView: View {
             try presetStore.delete(id)
             for index in items.indices where items[index].choice == .custom(id) {
                 items[index].choice = .builtIn(.standard)
+            }
+            for index in items.indices {
+                items[index].overlays.removeAll { $0.choice == .custom(id) }
             }
         } catch { presetError = error.localizedDescription }
     }
@@ -352,30 +511,59 @@ struct WatermarkExportView: View {
     }
 
     private func loadPreview() async {
-        preview = nil
         previewError = nil
         guard let currentItem else { return }
-        let configuration = currentConfiguration
+        if preparedPhotoID != currentItem.id {
+            previewPreparation?.cancel()
+            previewBase?.cancel()
+            preparedPhotoID = currentItem.id
+            previewPreparation = nil
+            previewBase = nil
+            preparedBaseKey = nil
+            preview = nil
+        }
         do {
-            let data = try await Task.detached(priority: .userInitiated) {
-                if let configuration {
-                    return try WatermarkService.previewData(photo: currentItem.photo,
-                                                            configuration: configuration,
-                                                            sourcePath: currentItem.sourcePath)
-                }
-                let preset: WatermarkPreset
-                switch currentItem.choice {
-                case .builtIn(let selected): preset = selected
-                case .custom: throw WatermarkError.unreadableImage
-                }
-                return try WatermarkService.previewData(photo: currentItem.photo, preset: preset,
+            let request = try WatermarkReviewPlan.request(for: currentItem,
+                                                          configurations: presetStore.configurations)
+            if previewPreparation == nil {
+                previewPreparation = Task.detached(priority: .userInitiated) {
+                    try WatermarkCustomRenderer.prepare(photo: currentItem.photo,
                                                         sourcePath: currentItem.sourcePath,
-                                                        matchOrientation: currentItem.matchOrientation)
-            }.value
+                                                        maxPixelSize: 1200)
+                }
+            }
+            let prepared = try await previewPreparation!.value
+            guard !Task.isCancelled else { return }
+            let baseKey = primaryKey
+            if preparedBaseKey != baseKey {
+                previewBase?.cancel()
+                previewBase = nil
+                preparedBaseKey = baseKey
+            }
+            if previewBase == nil {
+                previewBase = Task.detached(priority: .userInitiated) {
+                    let canvas = try WatermarkService.renderBase(prepared: prepared, style: request.style,
+                                                                  matchOrientation: request.matchOrientation)
+                    return CachedWatermarkBase(canvas: canvas)
+                }
+            }
+            let base = try await previewBase!.value
+            guard !Task.isCancelled else { return }
+            let renderTask = Task.detached(priority: .userInitiated) {
+                try Task.checkCancellation()
+                return try WatermarkService.previewData(prepared: prepared, base: base.canvas,
+                                                         overlays: request.overlays)
+            }
+            let data = try await withTaskCancellationHandler {
+                try await renderTask.value
+            } onCancel: {
+                renderTask.cancel()
+            }
             guard !Task.isCancelled else { return }
             preview = NSImage(data: data)
         } catch {
             guard !Task.isCancelled else { return }
+            preview = nil
             previewError = error.localizedDescription
         }
     }

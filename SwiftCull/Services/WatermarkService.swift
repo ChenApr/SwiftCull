@@ -94,12 +94,25 @@ enum WatermarkExportChoice: Hashable, Sendable {
     case custom(UUID)
 }
 
+struct WatermarkOverlayChoice: Identifiable, Hashable, Sendable {
+    let id: UUID
+    var choice: WatermarkExportChoice
+    var matchOrientation: Bool
+
+    init(id: UUID = UUID(), choice: WatermarkExportChoice, matchOrientation: Bool = true) {
+        self.id = id
+        self.choice = choice
+        self.matchOrientation = matchOrientation
+    }
+}
+
 struct WatermarkReviewItem: Identifiable, Sendable {
     let photo: PhotoEntry
     let sourcePath: String
     var include = true
     var choice: WatermarkExportChoice = .builtIn(.standard)
     var matchOrientation = true
+    var overlays: [WatermarkOverlayChoice] = []
     var id: String { photo.id }
 }
 
@@ -109,34 +122,125 @@ enum WatermarkExportStyle: Sendable {
     case custom(WatermarkConfiguration)
 }
 
+struct WatermarkExportLayer: Sendable {
+    let style: WatermarkExportStyle
+    let matchOrientation: Bool
+}
+
 struct WatermarkExportRequest: Sendable {
     let photo: PhotoEntry
     let sourcePath: String
     let style: WatermarkExportStyle
     let matchOrientation: Bool
+    let overlays: [WatermarkExportLayer]
 }
 
 enum WatermarkReviewPlan {
     static func requests(from items: [WatermarkReviewItem],
                          configurations: [WatermarkConfiguration]) throws -> [WatermarkExportRequest] {
-        try items.filter(\.include).map { item in
-            let style: WatermarkExportStyle
-            switch item.choice {
-            case .builtIn(let preset):
-                style = .preset(preset)
-            case .custom(let id):
-                guard let configuration = configurations.first(where: { $0.id == id }) else {
-                    throw WatermarkError.missingPreset
-                }
-                style = .custom(configuration)
+        try items.filter(\.include).map { try request(for: $0, configurations: configurations) }
+    }
+
+    static func request(for item: WatermarkReviewItem,
+                        configurations: [WatermarkConfiguration]) throws -> WatermarkExportRequest {
+        let primary = try layer(for: item.choice, matchOrientation: item.matchOrientation,
+                                configurations: configurations)
+        let overlays = try item.overlays.map {
+            try layer(for: $0.choice, matchOrientation: $0.matchOrientation,
+                      configurations: configurations)
+        }
+        return WatermarkExportRequest(photo: item.photo, sourcePath: item.sourcePath,
+                                      style: primary.style, matchOrientation: primary.matchOrientation,
+                                      overlays: overlays)
+    }
+
+    private static func layer(for choice: WatermarkExportChoice, matchOrientation: Bool,
+                              configurations: [WatermarkConfiguration]) throws -> WatermarkExportLayer {
+        switch choice {
+        case .builtIn(let preset):
+            return WatermarkExportLayer(style: .preset(preset), matchOrientation: matchOrientation)
+        case .custom(let id):
+            guard let configuration = configurations.first(where: { $0.id == id }) else {
+                throw WatermarkError.missingPreset
             }
-            return WatermarkExportRequest(photo: item.photo, sourcePath: item.sourcePath,
-                                          style: style, matchOrientation: item.matchOrientation)
+            return WatermarkExportLayer(style: .custom(configuration), matchOrientation: matchOrientation)
         }
     }
 }
 
 enum WatermarkService {
+    static func renderBase(prepared: WatermarkCustomRenderer.PreparedSource,
+                           style: WatermarkExportStyle,
+                           matchOrientation: Bool) throws -> SemiWatermarkRenderer.RenderedCanvas {
+        switch style {
+        case .preset(let preset):
+            return try SemiWatermarkRenderer.renderCanvas(prepared: prepared.semi, preset: preset,
+                                                           matchOrientation: matchOrientation)
+        case .custom(let configuration):
+            return try WatermarkCustomRenderer.renderCanvas(prepared: prepared,
+                                                              configuration: configuration)
+        }
+    }
+
+    static func render(prepared: WatermarkCustomRenderer.PreparedSource,
+                       base: SemiWatermarkRenderer.RenderedCanvas,
+                       overlays: [WatermarkExportLayer]) throws -> NSBitmapImageRep {
+        let portrait = prepared.semi.image.height > prepared.semi.image.width
+        let configurations: [WatermarkConfiguration] = overlays.map { layer in
+            switch layer.style {
+            case .preset(let preset):
+                return .draft(from: preset.resolved(isPortrait: portrait,
+                                                    matchOrientation: layer.matchOrientation))
+            case .custom(let saved):
+                let preset = saved.basePreset.resolved(isPortrait: portrait,
+                                                       matchOrientation: saved.matchOrientation == true)
+                return saved.adapted(to: preset)
+            }
+        }
+        return try WatermarkCustomRenderer.overlay(prepared: prepared, configurations: configurations,
+                                                   on: base).bitmap
+    }
+
+    static func render(prepared: WatermarkCustomRenderer.PreparedSource,
+                       request: WatermarkExportRequest) throws -> NSBitmapImageRep {
+        let base = try renderBase(prepared: prepared, style: request.style,
+                                  matchOrientation: request.matchOrientation)
+        return try render(prepared: prepared, base: base, overlays: request.overlays)
+    }
+
+    static func previewData(request: WatermarkExportRequest,
+                            prepared: WatermarkCustomRenderer.PreparedSource) throws -> Data {
+        let base = try renderBase(prepared: prepared, style: request.style,
+                                  matchOrientation: request.matchOrientation)
+        return try previewData(prepared: prepared, base: base, overlays: request.overlays)
+    }
+
+    static func previewData(prepared: WatermarkCustomRenderer.PreparedSource,
+                            base: SemiWatermarkRenderer.RenderedCanvas,
+                            overlays: [WatermarkExportLayer]) throws -> Data {
+        guard let data = try render(prepared: prepared, base: base, overlays: overlays)
+            .representation(using: .jpeg, properties: [.compressionFactor: 0.8]) else {
+            throw WatermarkError.encodingFailed
+        }
+        return data
+    }
+
+    static func jpegData(request: WatermarkExportRequest) throws -> Data {
+        let prepared = try WatermarkCustomRenderer.prepare(photo: request.photo,
+                                                            sourcePath: request.sourcePath)
+        guard let data = try render(prepared: prepared, request: request)
+            .representation(using: .jpeg, properties: [.compressionFactor: 0.92]) else {
+            throw WatermarkError.encodingFailed
+        }
+        return data
+    }
+
+    @discardableResult
+    static func export(request: WatermarkExportRequest, to directory: URL) throws -> URL {
+        let data = try jpegData(request: request)
+        return try write(data, photo: request.photo, sourcePath: request.sourcePath, to: directory)
+    }
+
     static func render(photo: PhotoEntry, preset: WatermarkPreset, sourcePath: String? = nil,
                        matchOrientation: Bool = false, maxPixelSize: Int? = nil) throws -> NSBitmapImageRep {
         try SemiWatermarkRenderer.render(photo: photo, preset: preset, sourcePath: sourcePath,
