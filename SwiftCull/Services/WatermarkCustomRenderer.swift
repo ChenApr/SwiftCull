@@ -129,12 +129,13 @@ enum WatermarkCustomRenderer {
                 }
                 continue
             }
-            let font = NSFont.systemFont(ofSize: size, weight: component.bold ? .semibold : .regular)
+            let weight: NSFont.Weight = component.bold ? .semibold : .regular
+            let font = WatermarkFont.resolve(id: component.fontID, size: size, weight: weight)
             let color = NSColor.watermarkHex(component.colorHex) ?? (isFooter ? .black : .white)
             let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: color]
             let rawWidth = (value as NSString).size(withAttributes: attributes).width
             let fittedFont = rawWidth > maxWidth
-                ? NSFont.systemFont(ofSize: max(6, size * maxWidth / rawWidth), weight: component.bold ? .semibold : .regular)
+                ? WatermarkFont.resolve(id: component.fontID, size: max(6, size * maxWidth / rawWidth), weight: weight)
                 : font
             let fittedAttributes: [NSAttributedString.Key: Any] = [.font: fittedFont, .foregroundColor: color]
             let textSize = (value as NSString).size(withAttributes: fittedAttributes)

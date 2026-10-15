@@ -202,6 +202,32 @@ struct WatermarkPresetEditorView: View {
                     .monospacedDigit().frame(width: 48)
             }
             if component.wrappedValue.kind != .logo {
+                Picker("字体", selection: component.fontID) {
+                    Text("原样（系统字体）").tag(String?.none)
+                    Section("常用字体") {
+                        ForEach(Array(WatermarkFont.bundled.prefix(5))) { option in
+                            Text(option.name).tag(Optional(option.id))
+                        }
+                    }
+                    Section("艺术字体") {
+                        ForEach(Array(WatermarkFont.bundled.dropFirst(5))) { option in
+                            Text(option.name).tag(Optional(option.id))
+                        }
+                    }
+                    Section("本机字体") {
+                        ForEach(WatermarkFont.local) { option in
+                            Text(option.name + (WatermarkFont.isAvailable(option) ? "" : "（未安装）"))
+                                .tag(Optional(option.id))
+                                .disabled(!WatermarkFont.isAvailable(option))
+                        }
+                    }
+                }
+                if let id = component.wrappedValue.fontID,
+                   let option = (WatermarkFont.bundled + WatermarkFont.local).first(where: { $0.id == id }) {
+                    Text("SwiftCull  光影留痕")
+                        .font(.custom(option.family, size: 18))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
                 HStack {
                     ColorPicker("文字颜色", selection: Binding(
                         get: { Color(nsColor: NSColor.watermarkHex(component.wrappedValue.colorHex) ?? .black) },

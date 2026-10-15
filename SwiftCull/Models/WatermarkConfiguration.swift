@@ -101,6 +101,7 @@ struct WatermarkConfiguration: Codable, Hashable, Identifiable, Sendable {
             if source.colorHex != baseline.colorHex { result.colorHex = source.colorHex }
             if source.bold != baseline.bold { result.bold = source.bold }
             if source.text != baseline.text { result.text = source.text }
+            result.fontID = source.fontID
             result.imageData = source.imageData
             return result
         }
@@ -117,6 +118,8 @@ struct WatermarkComponent: Codable, Hashable, Identifiable, Sendable {
     var fontPercent = 1.8
     var colorHex = "#202020"
     var bold = false
+    /// Nil preserves the original system font used by older presets and built-in templates.
+    var fontID: String?
     var slot: Slot?
     /// PNG or JPEG bytes embedded in the preset so it survives moving the preset file.
     var imageData: Data?
