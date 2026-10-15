@@ -8,6 +8,7 @@ final class VideoPlaybackController: ObservableObject {
     @Published private(set) var isPlaying = false
     @Published private(set) var currentTime: Double = 0
     @Published private(set) var duration: Double = 0
+    @Published private(set) var volume: Float = 1
 
     private var loadedURL: URL?
     private var timeObserver: Any?
@@ -18,6 +19,7 @@ final class VideoPlaybackController: ObservableObject {
 
         let player = AVPlayer(url: url)
         self.player = player
+        player.volume = volume
         loadedURL = url
         timeObserver = player.addPeriodicTimeObserver(
             forInterval: CMTime(seconds: 0.1, preferredTimescale: 600), queue: .main
@@ -75,5 +77,14 @@ final class VideoPlaybackController: ObservableObject {
         player.pause()
         isPlaying = false
         item.step(byCount: count)
+    }
+
+    func adjustVolume(by delta: Float) {
+        setVolume((player?.volume ?? volume) + delta)
+    }
+
+    func setVolume(_ value: Float) {
+        volume = min(max(value, 0), 1)
+        player?.volume = volume
     }
 }

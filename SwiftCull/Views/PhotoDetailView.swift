@@ -131,13 +131,17 @@ struct PhotoDetailView: View {
                 Spacer()
                 if photo.movPath != nil {
                     Button {
-                        store.enterVideoPlaybackMode(for: photo)
+                        store.toggleVideoPlaybackMode(for: photo)
                     } label: {
-                        Label("播放视频", systemImage: "play.rectangle")
+                        Label(store.isVideoPlaybackMode && store.selectedPhoto?.id == photo.id
+                              ? "退出播放" : "播放视频",
+                              systemImage: store.isVideoPlaybackMode && store.selectedPhoto?.id == photo.id
+                              ? "stop.circle" : "play.rectangle")
                             .font(.caption2.weight(.semibold))
                     }
                     .buttonStyle(.plain)
-                    .help("播放视频 (V)")
+                    .help(store.isVideoPlaybackMode && store.selectedPhoto?.id == photo.id
+                          ? "退出播放 (V)" : "播放视频 (V)")
                 }
                 Button {
                     openQuickLook(photo)
@@ -338,11 +342,15 @@ struct PhotoDetailView: View {
 
                 if !allFiles.isEmpty {
                     if photo.movPath != nil {
-                        Button { store.enterVideoPlaybackMode(for: photo) } label: {
-                            actionLabel("播放视频", systemImage: "play.rectangle")
+                        Button { store.toggleVideoPlaybackMode(for: photo) } label: {
+                            actionLabel(store.isVideoPlaybackMode && store.selectedPhoto?.id == photo.id
+                                        ? "退出播放 (V)" : "播放视频 (V)",
+                                        systemImage: store.isVideoPlaybackMode && store.selectedPhoto?.id == photo.id
+                                        ? "stop.circle" : "play.rectangle")
                         }
                         .buttonStyle(InspectorActionButtonStyle())
-                        .help("播放视频 (V)")
+                        .help(store.isVideoPlaybackMode && store.selectedPhoto?.id == photo.id
+                              ? "退出播放 (V)" : "播放视频 (V)")
                     }
                     if !photo.isVideoOnly {
                         Button { store.editCrop(photo) } label: {

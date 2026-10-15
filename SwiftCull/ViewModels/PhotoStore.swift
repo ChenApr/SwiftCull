@@ -660,6 +660,15 @@ class PhotoStore: ObservableObject {
         return enterVideoPlaybackMode()
     }
 
+    @discardableResult
+    func toggleVideoPlaybackMode(for photo: PhotoEntry) -> Bool {
+        if isVideoPlaybackMode, selectedPhoto?.id == photo.id {
+            exitVideoPlaybackMode()
+            return true
+        }
+        return enterVideoPlaybackMode(for: photo)
+    }
+
     func exitVideoPlaybackMode() {
         guard isVideoPlaybackMode else { return }
         isVideoPlaybackMode = false

@@ -96,6 +96,7 @@ struct ShortcutGuideView: View {
         ("Space", "普通浏览：Quick Look 预览；播放模式：播放 / 暂停"),
         ("V", "进入 / 退出当前照片的视频播放模式"),
         ("← →", "播放模式：前后跳转 5 秒；Shift + 左右逐帧"),
+        ("↑ ↓", "播放模式：调节音量"),
         ("E", "网格 / 大图切换"),
         ("C", "裁剪单张照片 / 编辑当前版本"),
         ("Q", "完成并退出多选"),
@@ -272,10 +273,12 @@ struct PhotoSinglePreviewView: View {
     private var zoomControls: some View {
         HStack(spacing: 4) {
             if photo.movPath != nil {
-                Button { store.enterVideoPlaybackMode(for: photo) } label: {
-                    Image(systemName: "play.rectangle")
+                Button { store.toggleVideoPlaybackMode(for: photo) } label: {
+                    Image(systemName: store.isVideoPlaybackMode && store.selectedPhoto?.id == photo.id
+                          ? "stop.circle" : "play.rectangle")
                 }
-                .help("播放视频 (V)")
+                .help(store.isVideoPlaybackMode && store.selectedPhoto?.id == photo.id
+                      ? "退出播放 (V)" : "播放视频 (V)")
                 Divider().frame(height: 16)
             }
             Button {

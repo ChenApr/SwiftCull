@@ -65,6 +65,10 @@ enum KeyboardShortcutHandler {
                     store.videoPlaybackController.seek(by: Double(direction * 5))
                 }
                 return true
+            case 125, 126: // Down / Up
+                let direction: Float = keyCode == 126 ? 0.1 : -0.1
+                store.videoPlaybackController.adjustVolume(by: direction)
+                return true
             case 53: // Escape
                 store.exitVideoPlaybackMode()
                 return true

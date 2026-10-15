@@ -114,7 +114,8 @@ struct ShortcutHintBar: View {
                 ShortcutHintItem(keys: ["V", "Esc"], label: "退出视频"),
                 ShortcutHintItem(keys: ["Space"], label: "播放 / 暂停"),
                 ShortcutHintItem(keys: ["←", "→"], label: "跳转 5 秒"),
-                ShortcutHintItem(keys: ["⇧", "←", "→"], label: "逐帧")
+                ShortcutHintItem(keys: ["⇧", "←", "→"], label: "逐帧"),
+                ShortcutHintItem(keys: ["↑", "↓"], label: "音量")
             ]
         }
         if store.viewMode == .single {
