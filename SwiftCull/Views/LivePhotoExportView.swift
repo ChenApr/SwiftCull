@@ -10,6 +10,12 @@ struct LivePhotoExportView: View {
     @State private var timeObserver: Any?
     @State private var duration: Double = 0
     @State private var previewTime: Double = 0
+    @State private var isClipPreviewing = false
+    @State private var previewStarted = false
+    @State private var previewReturnTime: Double?
+    @State private var previewEndTime: Double = 0
+    @State private var previewToken = UUID()
+    @State private var boundaryObserver: Any?
     @State private var clip = LivePhotoClip(start: 0, end: 0, cover: 0)
     @State private var timelineWindowStart: Double = 0
     @State private var destination: Destination = .folder
@@ -56,6 +62,20 @@ struct LivePhotoExportView: View {
                     } label: {
                         Label("在此选取片段", systemImage: "scope")
                     }
+                    .disabled(duration < 0.5 || isExporting)
+
+                    Button {
+                        if isClipPreviewing {
+                            stopClipPreview(restorePosition: true)
+                        } else {
+                            startClipPreview()
+                        }
+                    } label: {
+                        Label(isClipPreviewing ? "停止预览" : "预览实况片段",
+                              systemImage: isClipPreviewing ? "stop.fill" : "play.fill")
+                    }
+                    .keyboardShortcut("p", modifiers: [])
+                    .help("预览当前选取的实况片段 (P)")
                     .disabled(duration < 0.5 || isExporting)
                 }
 
@@ -134,6 +154,7 @@ struct LivePhotoExportView: View {
         .task { await prepare() }
         .onDisappear {
             exportTask?.cancel()
+            stopClipPreview(restorePosition: false)
             if let timeObserver { player.removeTimeObserver(timeObserver) }
             player.pause()
         }
@@ -154,9 +175,57 @@ struct LivePhotoExportView: View {
     }
 
     private func seek(to seconds: Double) {
+        stopClipPreview(restorePosition: false)
         player.pause()
         player.seek(to: CMTime(seconds: seconds, preferredTimescale: 600),
                     toleranceBefore: .zero, toleranceAfter: .zero)
+    }
+
+    private func startClipPreview() {
+        guard duration >= 0.5, clip.duration >= 0.5 else { return }
+        player.pause()
+        let currentTime = player.currentTime().seconds
+        previewReturnTime = currentTime.isFinite ? currentTime : clip.cover
+        previewEndTime = clip.end
+        previewStarted = false
+        isClipPreviewing = true
+        previewToken = UUID()
+        let token = previewToken
+
+        boundaryObserver = player.addBoundaryTimeObserver(
+            forTimes: [NSValue(time: CMTime(seconds: clip.end, preferredTimescale: 600))],
+            queue: .main
+        ) {
+            Task { @MainActor in
+                guard previewToken == token else { return }
+                stopClipPreview(restorePosition: true)
+            }
+        }
+        player.seek(to: CMTime(seconds: clip.start, preferredTimescale: 600),
+                    toleranceBefore: .zero, toleranceAfter: .zero) { finished in
+            Task { @MainActor in
+                guard finished, isClipPreviewing, previewToken == token else { return }
+                previewStarted = true
+                player.play()
+            }
+        }
+    }
+
+    private func stopClipPreview(restorePosition: Bool) {
+        guard isClipPreviewing else { return }
+        previewToken = UUID()
+        isClipPreviewing = false
+        previewStarted = false
+        player.pause()
+        if let boundaryObserver {
+            player.removeTimeObserver(boundaryObserver)
+            self.boundaryObserver = nil
+        }
+        if restorePosition, let previewReturnTime {
+            player.seek(to: CMTime(seconds: previewReturnTime, preferredTimescale: 600),
+                        toleranceBefore: .zero, toleranceAfter: .zero)
+        }
+        previewReturnTime = nil
     }
 
     @MainActor
@@ -171,6 +240,9 @@ struct LivePhotoExportView: View {
             ) { time in
                 Task { @MainActor in
                     previewTime = time.seconds.isFinite ? time.seconds : 0
+                    if isClipPreviewing, previewStarted, previewTime >= previewEndTime - 0.02 {
+                        stopClipPreview(restorePosition: true)
+                    }
                 }
             }
         } catch {
@@ -180,6 +252,7 @@ struct LivePhotoExportView: View {
 
     private func export() {
         guard let path = photo.movPath else { return }
+        stopClipPreview(restorePosition: true)
         let output: LivePhotoDestination
         if destination == .folder {
             let panel = NSOpenPanel()
