@@ -11,6 +11,7 @@ struct LivePhotoExportView: View {
     @State private var duration: Double = 0
     @State private var previewTime: Double = 0
     @State private var clip = LivePhotoClip(start: 0, end: 0, cover: 0)
+    @State private var timelineWindowStart: Double = 0
     @State private var destination: Destination = .folder
     @State private var exportTask: Task<Void, Never>?
     @State private var isExporting = false
@@ -37,113 +38,99 @@ struct LivePhotoExportView: View {
 
             Divider()
 
-            HStack(alignment: .top, spacing: 0) {
-                VideoPlayer(player: player)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(.black)
+            VideoPlayer(player: player)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(.black)
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Text(photo.displayName)
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer()
+                    Button {
+                        recenter(on: previewTime)
+                    } label: {
+                        Label("在此选取片段", systemImage: "scope")
+                    }
+                    .disabled(duration < 0.5 || isExporting)
+                }
+
+                if let path = photo.movPath {
+                    LivePhotoTrimTimeline(
+                        clip: $clip,
+                        sourceURL: URL(fileURLWithPath: path),
+                        videoDuration: duration,
+                        windowStart: timelineWindowStart,
+                        isDisabled: duration < 0.5 || isExporting,
+                        onSeek: seek,
+                        onRecenter: recenter)
+                }
+
+                HStack(spacing: 12) {
+                    Text(timeLabel(clip.start))
+                    Spacer()
+                    Text(String(format: "片段 %.1f 秒", max(0, clip.duration)))
+                    Label("封面 \(timeLabel(clip.cover))", systemImage: "circle.fill")
+                        .labelStyle(.titleAndIcon)
+                    Spacer()
+                    Text(timeLabel(clip.end))
+                }
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
 
                 Divider()
 
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 18) {
-                        Text(photo.displayName)
-                            .font(.subheadline.weight(.semibold))
-                            .lineLimit(1)
-
-                        Group {
-                            Text("片段")
-                                .font(.subheadline.weight(.semibold))
-                            Button("以当前画面为中心选取 3 秒") {
-                                clip = .centered(on: previewTime, videoDuration: duration)
-                                seek(to: clip.cover)
-                            }
-                            .disabled(duration < 0.5)
-
-                            Stepper(value: startBinding, in: 0...max(0, duration), step: 0.1) {
-                                HStack {
-                                    Text("起点")
-                                    Spacer()
-                                    Text(timeLabel(clip.start)).monospacedDigit()
-                                }
-                            }
-                            Stepper(value: endBinding, in: 0...max(0, duration), step: 0.1) {
-                                HStack {
-                                    Text("终点")
-                                    Spacer()
-                                    Text(timeLabel(clip.end)).monospacedDigit()
-                                }
-                            }
-                            Text("片段时长 \(timeLabel(clip.duration))")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                HStack(spacing: 16) {
+                    Picker("保存到", selection: $destination) {
+                        ForEach(Destination.allCases, id: \.self) { option in
+                            Text(option.rawValue).tag(option)
                         }
-                        .disabled(duration < 0.5 || isExporting)
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(width: 250)
+                    .disabled(isExporting)
 
-                        Divider()
+                    Spacer()
 
-                        Group {
-                            Text("封面")
-                                .font(.subheadline.weight(.semibold))
-                            Slider(value: $clip.cover, in: clip.start...max(clip.start, clip.end - 0.1))
-                                .onChange(of: clip.cover) { _, value in seek(to: value) }
-                            HStack {
-                                Text(timeLabel(clip.cover)).monospacedDigit()
-                                Spacer()
-                                Button("使用当前画面") {
-                                    clip.cover = min(max(previewTime, clip.start), clip.end - 0.1)
-                                }
-                            }
-                            .font(.caption)
+                    if isExporting {
+                        ProgressView("正在生成实况照片…")
+                    } else {
+                        Button {
+                            export()
+                        } label: {
+                            Label(destination == .folder ? "选择目录并导出…" : "添加到照片",
+                                  systemImage: destination == .folder ? "square.and.arrow.up" : "photo.on.rectangle")
                         }
-                        .disabled(duration < 0.5 || isExporting)
+                        .buttonStyle(.borderedProminent)
+                        .disabled(duration < 0.5)
+                    }
+                }
 
-                        Divider()
-
-                        Picker("保存到", selection: $destination) {
-                            ForEach(Destination.allCases, id: \.self) { option in
-                                Text(option.rawValue).tag(option)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-                        .disabled(isExporting)
-
-                        if isExporting {
-                            ProgressView("正在生成实况照片…")
-                        } else {
-                            Button {
-                                export()
-                            } label: {
-                                Label(destination == .folder ? "选择目录并导出…" : "添加到照片",
-                                      systemImage: destination == .folder ? "square.and.arrow.up" : "photo.on.rectangle")
-                                    .frame(maxWidth: .infinity)
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .disabled(duration < 0.5)
-                        }
-
-                        if let errorMessage {
-                            Text(errorMessage)
-                                .font(.caption)
-                                .foregroundStyle(.red)
-                        }
-                        if let resultMessage {
-                            Text(resultMessage)
-                                .font(.caption)
-                            if let exportedPair {
-                                Button("在 Finder 中显示") {
-                                    NSWorkspace.shared.activateFileViewerSelecting(
-                                        [exportedPair.imageURL, exportedPair.videoURL])
-                                }
-                                .font(.caption)
+                if let errorMessage {
+                    Text(errorMessage)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+                if let resultMessage {
+                    HStack {
+                        Text(resultMessage)
+                        if let exportedPair {
+                            Button("在 Finder 中显示") {
+                                NSWorkspace.shared.activateFileViewerSelecting(
+                                    [exportedPair.imageURL, exportedPair.videoURL])
                             }
                         }
                     }
-                    .padding(20)
+                    .font(.caption)
                 }
-                .frame(width: 310)
             }
+            .padding(20)
         }
-        .frame(minWidth: 800, minHeight: 540)
+        .frame(minWidth: 800, idealWidth: 920, minHeight: 640, idealHeight: 720)
         .task { await prepare() }
         .onDisappear {
             exportTask?.cancel()
@@ -152,26 +139,22 @@ struct LivePhotoExportView: View {
         }
     }
 
-    private var startBinding: Binding<Double> {
-        Binding(get: { clip.start }, set: { value in
-            clip.start = min(max(value, 0), clip.end - 0.5)
-            clip.end = min(clip.end, clip.start + 3)
-            clip.cover = min(max(clip.cover, clip.start), clip.end - 0.1)
-        })
-    }
-
-    private var endBinding: Binding<Double> {
-        Binding(get: { clip.end }, set: { value in
-            clip.end = max(min(value, duration, clip.start + 3), clip.start + 0.5)
-            clip.cover = min(max(clip.cover, clip.start), clip.end - 0.1)
-        })
-    }
-
     private func timeLabel(_ seconds: Double) -> String {
-        String(format: "%.1f 秒", max(0, seconds))
+        String(format: "%02d:%04.1f", Int(max(0, seconds)) / 60,
+               max(0, seconds).truncatingRemainder(dividingBy: 60))
+    }
+
+    private func recenter(on time: Double) {
+        guard duration >= 0.5 else { return }
+        clip = .centered(on: time, videoDuration: duration)
+        let width = min(duration, 10)
+        timelineWindowStart = min(max((clip.start + clip.end - width) / 2, 0),
+                                  max(0, duration - width))
+        seek(to: clip.cover)
     }
 
     private func seek(to seconds: Double) {
+        player.pause()
         player.seek(to: CMTime(seconds: seconds, preferredTimescale: 600),
                     toleranceBefore: .zero, toleranceAfter: .zero)
     }
@@ -181,9 +164,8 @@ struct LivePhotoExportView: View {
         guard let path = photo.movPath else { return }
         do {
             duration = try await LivePhotoService.videoDuration(at: URL(fileURLWithPath: path))
-            clip = .centered(on: initialTime, videoDuration: duration)
             player.replaceCurrentItem(with: AVPlayerItem(url: URL(fileURLWithPath: path)))
-            seek(to: clip.cover)
+            recenter(on: initialTime)
             timeObserver = player.addPeriodicTimeObserver(
                 forInterval: CMTime(seconds: 0.1, preferredTimescale: 600), queue: .main
             ) { time in
