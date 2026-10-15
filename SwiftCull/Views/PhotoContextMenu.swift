@@ -63,6 +63,12 @@ struct PhotoContextMenu: View {
 
         Divider()
 
+        if !isBatch && photo.movPath != nil {
+            Button { store.enterVideoPlaybackMode(for: photo) } label: {
+                Label("播放视频 (V)", systemImage: "play.rectangle")
+            }
+        }
+
         if !isBatch && !photo.isVideoOnly {
             Button { store.editCrop(photo) } label: {
                 Label("裁剪 / 编辑版本…", systemImage: "crop.rotate")

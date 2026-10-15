@@ -93,6 +93,7 @@ struct ShortcutHintBar: View {
     }
 
     private var contextTitle: String {
+        if store.isVideoPlaybackMode { return "视频播放" }
         if store.viewMode == .single { return "大图浏览" }
         if store.isSelectMode { return "批量操作" }
         if store.selectedPhoto != nil { return "浏览" }
@@ -100,6 +101,7 @@ struct ShortcutHintBar: View {
     }
 
     private var contextIcon: String {
+        if store.isVideoPlaybackMode { return "play.rectangle.fill" }
         if store.viewMode == .single { return "photo.fill" }
         if store.isSelectMode { return "checkmark.circle.fill" }
         if store.selectedPhoto != nil { return "hand.point.up.left.fill" }
@@ -107,6 +109,14 @@ struct ShortcutHintBar: View {
     }
 
     private var hints: [ShortcutHintItem] {
+        if store.isVideoPlaybackMode {
+            return [
+                ShortcutHintItem(keys: ["V", "Esc"], label: "退出视频"),
+                ShortcutHintItem(keys: ["Space"], label: "播放 / 暂停"),
+                ShortcutHintItem(keys: ["←", "→"], label: "跳转 5 秒"),
+                ShortcutHintItem(keys: ["⇧", "←", "→"], label: "逐帧")
+            ]
+        }
         if store.viewMode == .single {
             var items = [
                 ShortcutHintItem(keys: ["E"], label: "退出大图浏览"),
@@ -115,6 +125,9 @@ struct ShortcutHintBar: View {
             ]
             if store.canEditSelectedCrop {
                 items.insert(ShortcutHintItem(keys: ["C"], label: "裁剪"), at: 1)
+            }
+            if store.canPlaySelectedVideo {
+                items.insert(ShortcutHintItem(keys: ["V"], label: "播放视频"), at: 1)
             }
             return items
         }
@@ -138,6 +151,9 @@ struct ShortcutHintBar: View {
             ]
             if store.canEditSelectedCrop {
                 items.insert(ShortcutHintItem(keys: ["C"], label: "裁剪"), at: 1)
+            }
+            if store.canPlaySelectedVideo {
+                items.insert(ShortcutHintItem(keys: ["V"], label: "播放视频"), at: 1)
             }
             return items
         } else {

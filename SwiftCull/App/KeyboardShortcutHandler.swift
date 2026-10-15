@@ -46,6 +46,33 @@ enum KeyboardShortcutHandler {
             return store.copyOriginalFiles()
         }
 
+        if chars == "v", !hasCommandModifier, !isTextFieldFocused,
+           !flags.contains(.shift), !flags.contains(.function) {
+            return store.toggleVideoPlaybackMode()
+        }
+
+        if store.isVideoPlaybackMode {
+            guard !hasCommandModifier, !isTextFieldFocused else { return false }
+            switch keyCode {
+            case 49: // Space
+                store.videoPlaybackController.togglePlayPause()
+                return true
+            case 123, 124: // Left / Right
+                let direction = keyCode == 123 ? -1 : 1
+                if flags.contains(.shift) {
+                    store.videoPlaybackController.stepFrame(by: direction)
+                } else {
+                    store.videoPlaybackController.seek(by: Double(direction * 5))
+                }
+                return true
+            case 53: // Escape
+                store.exitVideoPlaybackMode()
+                return true
+            default:
+                break
+            }
+        }
+
         switch keyCode {
         case 49: // Space
             guard !hasCommandModifier, NSApp.keyWindow?.isSheet != true,
