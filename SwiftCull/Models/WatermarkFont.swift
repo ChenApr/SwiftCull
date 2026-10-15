@@ -17,7 +17,10 @@ struct WatermarkFont: Identifiable {
         .init(id: "caveat", name: "Caveat", family: "Caveat", file: "Caveat"),
         .init(id: "dancing-script", name: "Dancing Script", family: "Dancing Script", file: "DancingScript"),
         .init(id: "great-vibes", name: "Great Vibes", family: "Great Vibes", file: "GreatVibes"),
+        .init(id: "kn-maiyuan", name: "荆南麦圆体", family: "KN Maiyuan", file: "KNMaiyuan"),
+        .init(id: "liu-jian-mao-cao", name: "刘建毛草", family: "Liu Jian Mao Cao", file: "LiuJianMaoCao"),
         .init(id: "long-cang", name: "龙藏体", family: "Long Cang", file: "LongCang"),
+        .init(id: "lxgw-marker-gothic", name: "霞鹜漫黑", family: "LXGW Marker Gothic", file: "LXGWMarkerGothic"),
         .init(id: "ma-shan-zheng", name: "马善政毛笔楷书", family: "Ma Shan Zheng", file: "MaShanZheng"),
         .init(id: "pacifico", name: "Pacifico", family: "Pacifico", file: "Pacifico"),
         .init(id: "parisienne", name: "Parisienne", family: "Parisienne", file: "Parisienne"),
@@ -27,7 +30,10 @@ struct WatermarkFont: Identifiable {
 
     static let local: [WatermarkFont] = [
         .init(id: "local-times-new-roman", name: "Times New Roman", family: "Times New Roman", file: nil),
-        .init(id: "local-songti-sc", name: "宋体", family: "Songti SC", file: nil)
+        .init(id: "local-georgia", name: "Georgia", family: "Georgia", file: nil),
+        .init(id: "local-arial", name: "Arial", family: "Arial", file: nil),
+        .init(id: "local-songti-sc", name: "宋体", family: "Songti SC", file: nil),
+        .init(id: "local-pingfang-sc", name: "苹方", family: "PingFang SC", file: nil)
     ]
 
     static func isAvailable(_ option: WatermarkFont) -> Bool {
