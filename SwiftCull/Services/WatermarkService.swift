@@ -238,7 +238,7 @@ enum WatermarkService {
     @discardableResult
     static func export(request: WatermarkExportRequest, to directory: URL) throws -> URL {
         let data = try jpegData(request: request)
-        return try write(data, photo: request.photo, sourcePath: request.sourcePath, to: directory)
+        return try write(data, sourcePath: request.sourcePath, to: directory)
     }
 
     static func render(photo: PhotoEntry, preset: WatermarkPreset, sourcePath: String? = nil,
