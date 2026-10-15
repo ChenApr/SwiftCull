@@ -13,10 +13,20 @@ struct WelcomeView: View {
                 Text("SwiftCull")
                     .font(.title.weight(.bold))
 
-                if store.errorMessage != nil {
-                    Text(store.errorMessage!)
+                if let errorMessage = store.errorMessage {
+                    Text(errorMessage)
                         .font(.subheadline)
                         .foregroundStyle(.orange)
+                        .multilineTextAlignment(.center)
+                } else if !store.sourcePath.isEmpty && store.photos.isEmpty {
+                    Text("未找到可识别的照片")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    Text(store.sourcePath)
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(2)
+                        .truncationMode(.middle)
                         .multilineTextAlignment(.center)
                 } else {
                     Text("打开一个包含照片的文件夹开始浏览")
@@ -28,7 +38,8 @@ struct WelcomeView: View {
             Button {
                 store.selectPath()
             } label: {
-                Label("打开文件夹", systemImage: "folder.badge.plus")
+                Label(store.sourcePath.isEmpty ? "打开文件夹" : "选择其他文件夹",
+                      systemImage: "folder.badge.plus")
                     .font(.title3.weight(.semibold))
                     .frame(maxWidth: 280)
             }
