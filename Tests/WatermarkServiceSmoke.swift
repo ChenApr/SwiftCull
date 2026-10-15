@@ -193,10 +193,32 @@ struct WatermarkServiceSmoke {
                                                          text: "SwiftCull 光影留痕", colorHex: "#FFFFFF", bold: true))
             let customImage = try WatermarkCustomRenderer.render(photo: photo, configuration: custom)
             let customPreview = try WatermarkService.previewData(photo: photo, configuration: custom)
+            let preparedPreview = try WatermarkCustomRenderer.prepare(photo: photo, maxPixelSize: 1200)
+            let cachedTemplate = try WatermarkCustomRenderer.render(prepared: preparedPreview,
+                                                                    configuration: custom)
+            let uncachedTemplate = try WatermarkCustomRenderer.render(photo: photo, configuration: custom,
+                                                                      maxPixelSize: 1200)
+            precondition(cachedTemplate.tiffRepresentation == uncachedTemplate.tiffRepresentation,
+                         "Cached template preview differs from the original renderer")
             precondition(customImage.pixelsWide == width && customImage.pixelsHigh > height)
             precondition(!customPreview.isEmpty)
             custom.components[custom.components.count - 1].fontID = "lxgw-wenkai"
             let styledPreview = try WatermarkService.previewData(photo: photo, configuration: custom)
+            let cachedFont = try WatermarkCustomRenderer.render(prepared: preparedPreview,
+                                                                configuration: custom)
+            let uncachedFont = try WatermarkCustomRenderer.render(photo: photo, configuration: custom,
+                                                                  maxPixelSize: 1200)
+            precondition(cachedFont.tiffRepresentation == uncachedFont.tiffRepresentation,
+                         "Cached font preview differs from the original renderer")
+            var freeform = custom
+            freeform.templateLayout = false
+            let cachedFreeform = try WatermarkCustomRenderer.render(prepared: preparedPreview,
+                                                                    configuration: freeform)
+            let uncachedFreeform = try WatermarkCustomRenderer.render(photo: photo,
+                                                                      configuration: freeform,
+                                                                      maxPixelSize: 1200)
+            precondition(cachedFreeform.tiffRepresentation == uncachedFreeform.tiffRepresentation,
+                         "Cached freeform preview differs from the original renderer")
             precondition(styledPreview != customPreview, "Changing the font did not update the preview")
             let styledRoundtrip = try JSONDecoder().decode(WatermarkConfiguration.self,
                                                           from: JSONEncoder().encode(custom))

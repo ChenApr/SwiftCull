@@ -3,20 +3,40 @@ import CoreImage
 import ImageIO
 
 enum WatermarkCustomRenderer {
-    static func render(photo: PhotoEntry, configuration: WatermarkConfiguration,
-                       sourcePath: String? = nil, maxPixelSize: Int? = nil) throws -> NSBitmapImageRep {
-        if configuration.templateLayout == true {
-            return try SemiWatermarkRenderer.render(photo: photo, preset: configuration.basePreset,
-                                                    sourcePath: sourcePath,
-                                                    matchOrientation: configuration.matchOrientation == true,
-                                                    maxPixelSize: maxPixelSize, configuration: configuration)
-        }
+    struct PreparedSource {
+        let path: String
+        let semi: SemiWatermarkRenderer.PreparedSource
+        let exif: PhotoExifInfo
+    }
+
+    static func prepare(photo: PhotoEntry, sourcePath: String? = nil,
+                        maxPixelSize: Int? = nil) throws -> PreparedSource {
         guard let path = sourcePath ?? photo.watermarkSourcePath(preferRaw: false) else {
             throw WatermarkError.unreadableImage
         }
-        let cgImage = try CropImageService.image(path: path, crop: photo.cropRect,
-                                                 maxPixelSize: maxPixelSize)
-        let exif = PhotoExifInfo.load(from: path, fallbackDate: photo.fileDate)
+        let semi = try SemiWatermarkRenderer.prepare(photo: photo, sourcePath: path,
+                                                     maxPixelSize: maxPixelSize)
+        return PreparedSource(path: path, semi: semi,
+                              exif: PhotoExifInfo.load(from: path, fallbackDate: photo.fileDate))
+    }
+
+    static func render(photo: PhotoEntry, configuration: WatermarkConfiguration,
+                       sourcePath: String? = nil, maxPixelSize: Int? = nil) throws -> NSBitmapImageRep {
+        let prepared = try prepare(photo: photo, sourcePath: sourcePath, maxPixelSize: maxPixelSize)
+        return try render(prepared: prepared, configuration: configuration)
+    }
+
+    static func render(prepared: PreparedSource,
+                       configuration: WatermarkConfiguration) throws -> NSBitmapImageRep {
+        if configuration.templateLayout == true {
+            return try SemiWatermarkRenderer.render(prepared: prepared.semi,
+                                                    preset: configuration.basePreset,
+                                                    matchOrientation: configuration.matchOrientation == true,
+                                                    configuration: configuration)
+        }
+        let path = prepared.path
+        let cgImage = prepared.semi.image
+        let exif = prepared.exif
         let short = CGFloat(min(cgImage.width, cgImage.height))
         let padding = max(0, short * CGFloat(configuration.paddingPercent / 100))
         let footer = max(0, short * CGFloat(configuration.footerPercent / 100))
