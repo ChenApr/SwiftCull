@@ -10,6 +10,11 @@ enum SemiWatermarkRenderer {
         let metadata: Metadata
     }
 
+    struct RenderedCanvas {
+        let bitmap: NSBitmapImageRep
+        let photoRect: CGRect
+    }
+
     static func prepare(photo: PhotoEntry, sourcePath: String?,
                         maxPixelSize: Int?) throws -> PreparedSource {
         guard let path = sourcePath ?? photo.watermarkSourcePath(preferRaw: false),
@@ -47,6 +52,13 @@ enum SemiWatermarkRenderer {
     static func render(prepared: PreparedSource, preset: WatermarkPreset,
                        matchOrientation: Bool,
                        configuration: WatermarkConfiguration? = nil) throws -> NSBitmapImageRep {
+        try renderCanvas(prepared: prepared, preset: preset, matchOrientation: matchOrientation,
+                         configuration: configuration).bitmap
+    }
+
+    static func renderCanvas(prepared: PreparedSource, preset: WatermarkPreset,
+                             matchOrientation: Bool,
+                             configuration: WatermarkConfiguration? = nil) throws -> RenderedCanvas {
         let image = prepared.image
         let metadata = prepared.metadata
         let selected = preset.resolved(isPortrait: image.height > image.width,
@@ -60,7 +72,7 @@ enum SemiWatermarkRenderer {
             return try blurred(image, metadata: metadata, nikon: selected.layout == .nikonBlur,
                                configuration: effectiveConfiguration)
         case .cornerParameters:
-            return try overlay(image) { canvas in
+            let bitmap = try overlay(image) { canvas in
                 let short = CGFloat(min(image.width, image.height))
                 let height = selected.isPortraitPreset ? short * 0.03 : CGFloat(image.height) * 0.03
                 let inset = CGFloat(image.height) * 0.05
@@ -72,8 +84,10 @@ enum SemiWatermarkRenderer {
                 drawExtras(effectiveConfiguration, metadata: metadata, image: image, canvas: canvas,
                            photoRect: canvas, footer: 0)
             }
+            return RenderedCanvas(bitmap: bitmap,
+                                  photoRect: CGRect(x: 0, y: 0, width: image.width, height: image.height))
         case .folderAndDate:
-            return try overlay(image) { canvas in
+            let bitmap = try overlay(image) { canvas in
                 let short = CGFloat(min(image.width, image.height))
                 let height = selected.isPortraitPreset ? short * 0.03 : CGFloat(image.height) * 0.03
                 drawSlot(.overlayFolderDate, defaultText: "\(metadata.folder)    \(metadata.date)",
@@ -86,12 +100,14 @@ enum SemiWatermarkRenderer {
                 drawExtras(effectiveConfiguration, metadata: metadata, image: image, canvas: canvas,
                            photoRect: canvas, footer: 0)
             }
+            return RenderedCanvas(bitmap: bitmap,
+                                  photoRect: CGRect(x: 0, y: 0, width: image.width, height: image.height))
         }
     }
 
     private static func bordered(_ image: CGImage, metadata: Metadata,
                                  preset: WatermarkPreset,
-                                 configuration: WatermarkConfiguration?) throws -> NSBitmapImageRep {
+                                 configuration: WatermarkConfiguration?) throws -> RenderedCanvas {
         let portrait = preset.isPortraitPreset
         let short = CGFloat(min(image.width, image.height))
         let imageHeight = CGFloat(image.height)
@@ -111,17 +127,17 @@ enum SemiWatermarkRenderer {
         let canvasWidth = CGFloat(image.width) + shadowPadding * 2 + sideMargin * 2
         let canvasHeight = shadowHeight + topMargin + footer + finalBottomMargin
         let canvasSize = CGSize(width: Int(canvasWidth), height: Int(canvasHeight))
+        let photoRect = CGRect(x: sideMargin + shadowPadding,
+                               y: finalBottomMargin + footer + shadowPadding,
+                               width: CGFloat(image.width), height: CGFloat(image.height))
 
-        return try bitmap(size: canvasSize) { canvas in
+        let result = try bitmap(size: canvasSize) { canvas in
             (configuration.flatMap { NSColor.watermarkHex($0.backgroundHex) } ?? .white).setFill()
             canvas.fill()
             if configuration?.background == .blurred,
                let background = softBackground(image, radius: short * 0.03) {
                 background.draw(in: canvas)
             }
-            let photoRect = CGRect(x: sideMargin + shadowPadding,
-                                   y: finalBottomMargin + footer + shadowPadding,
-                                   width: CGFloat(image.width), height: CGFloat(image.height))
             let radius: CGFloat = (isCard ? (portrait ? short * 0.01 : imageHeight * 0.01) : 0)
                 + short * CGFloat(configuration?.cornerRadiusPercent ?? 0) / 100
             drawPhoto(image, in: photoRect, radius: radius,
@@ -173,6 +189,7 @@ enum SemiWatermarkRenderer {
             drawExtras(configuration, metadata: metadata, image: image, canvas: canvas,
                        photoRect: photoRect, footer: footer)
         }
+        return RenderedCanvas(bitmap: result, photoRect: photoRect)
     }
 
     private static func drawFooterText(canvas: CGRect, image: CGImage, metadata: Metadata,
@@ -247,7 +264,7 @@ enum SemiWatermarkRenderer {
     }
 
     private static func blurred(_ image: CGImage, metadata: Metadata,
-                                nikon: Bool, configuration: WatermarkConfiguration?) throws -> NSBitmapImageRep {
+                                nikon: Bool, configuration: WatermarkConfiguration?) throws -> RenderedCanvas {
         let width = CGFloat(image.width)
         let height = CGFloat(image.height)
         let short = min(width, height)
@@ -268,8 +285,12 @@ enum SemiWatermarkRenderer {
         let cameraOffset = short * (nikon ? 0.0337 : 0.0224)
         let parameterOffset = short * (nikon ? 0.0263 : 0.0188)
         let photoOffset = short * (nikon ? 0.0024 : -0.0051)
+        let photoRect = CGRect(x: (canvasSize.width - width) / 2,
+                               y: bottom + parameterHeight + cameraHeight
+                                   + spacing * 2 + shadowPadding + photoOffset,
+                               width: width, height: height)
 
-        return try bitmap(size: canvasSize) { canvas in
+        let result = try bitmap(size: canvasSize) { canvas in
             if configuration?.background == .solid {
                 (configuration.flatMap { NSColor.watermarkHex($0.backgroundHex) } ?? .white).setFill()
                 canvas.fill()
@@ -278,10 +299,6 @@ enum SemiWatermarkRenderer {
                                            y: (canvas.height - height * 2) / 2,
                                            width: width * 2, height: height * 2))
             }
-            let photoRect = CGRect(x: (canvas.width - width) / 2,
-                                   y: bottom + parameterHeight + cameraHeight
-                                       + spacing * 2 + shadowPadding + photoOffset,
-                                   width: width, height: height)
             drawPhoto(image, in: photoRect, radius: roundedRadius,
                       shadowRadius: shadowRadius, shadowColor: .black)
             let textCenter = canvas.midX
@@ -328,6 +345,7 @@ enum SemiWatermarkRenderer {
             drawExtras(configuration, metadata: metadata, image: image, canvas: canvas,
                        photoRect: photoRect, footer: canvas.height - photoRect.minY)
         }
+        return RenderedCanvas(bitmap: result, photoRect: photoRect)
     }
 
     private static func overlay(_ image: CGImage,

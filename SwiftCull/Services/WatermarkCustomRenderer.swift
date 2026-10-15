@@ -28,11 +28,16 @@ enum WatermarkCustomRenderer {
 
     static func render(prepared: PreparedSource,
                        configuration: WatermarkConfiguration) throws -> NSBitmapImageRep {
+        try renderCanvas(prepared: prepared, configuration: configuration).bitmap
+    }
+
+    static func renderCanvas(prepared: PreparedSource,
+                             configuration: WatermarkConfiguration) throws -> SemiWatermarkRenderer.RenderedCanvas {
         if configuration.templateLayout == true {
-            return try SemiWatermarkRenderer.render(prepared: prepared.semi,
-                                                    preset: configuration.basePreset,
-                                                    matchOrientation: configuration.matchOrientation == true,
-                                                    configuration: configuration)
+            return try SemiWatermarkRenderer.renderCanvas(prepared: prepared.semi,
+                                                          preset: configuration.basePreset,
+                                                          matchOrientation: configuration.matchOrientation == true,
+                                                          configuration: configuration)
         }
         let path = prepared.path
         let cgImage = prepared.semi.image
@@ -97,12 +102,44 @@ enum WatermarkCustomRenderer {
         }
         context.flushGraphics()
         NSGraphicsContext.restoreGraphicsState()
-        return bitmap
+        return SemiWatermarkRenderer.RenderedCanvas(bitmap: bitmap, photoRect: photoRect)
+    }
+
+    static func overlay(prepared: PreparedSource, configurations: [WatermarkConfiguration],
+                        on base: SemiWatermarkRenderer.RenderedCanvas) throws -> SemiWatermarkRenderer.RenderedCanvas {
+        guard !configurations.isEmpty else { return base }
+        let source = base.bitmap
+        let canvas = CGRect(x: 0, y: 0, width: source.pixelsWide, height: source.pixelsHigh)
+        guard let bitmap = NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: source.pixelsWide, pixelsHigh: source.pixelsHigh,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
+        ), let context = NSGraphicsContext(bitmapImageRep: bitmap) else {
+            throw WatermarkError.encodingFailed
+        }
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = context
+        context.imageInterpolation = .high
+        source.draw(in: canvas)
+        let short = CGFloat(min(prepared.semi.image.width, prepared.semi.image.height))
+        for configuration in configurations {
+            for position in WatermarkComponent.Position.allCases {
+                let components = configuration.components.filter { $0.position == position }
+                guard !components.isEmpty else { continue }
+                draw(components, at: position, in: base.photoRect, canvas: canvas,
+                     footer: base.photoRect.minY, short: short, exif: prepared.exif, path: prepared.path,
+                     semiMetadata: prepared.semi.metadata)
+            }
+        }
+        context.flushGraphics()
+        NSGraphicsContext.restoreGraphicsState()
+        return SemiWatermarkRenderer.RenderedCanvas(bitmap: bitmap, photoRect: base.photoRect)
     }
 
     private static func draw(_ components: [WatermarkComponent], at position: WatermarkComponent.Position,
                              in photoRect: CGRect, canvas: CGRect, footer: CGFloat, short: CGFloat,
-                             exif: PhotoExifInfo, path: String) {
+                             exif: PhotoExifInfo, path: String,
+                             semiMetadata: SemiWatermarkRenderer.Metadata? = nil) {
         let isFooter = position.isFooter
         guard !isFooter || footer > 0 else { return }
         let left = position == .topLeft || position == .bottomLeft || position == .footerLeft
@@ -115,7 +152,7 @@ enum WatermarkCustomRenderer {
         let anchor = isFooter ? photoRect.minY - footer + short * 0.015
             : (bottom ? photoRect.minY + short * 0.03 : photoRect.maxY - short * 0.03)
         let lines = components.compactMap { component -> (WatermarkComponent, String)? in
-            let value = text(for: component, exif: exif, path: path)
+            let value = text(for: component, exif: exif, path: path, semiMetadata: semiMetadata)
             return value.isEmpty && component.kind != .logo ? nil : (component, value)
         }
         let totalHeight = lines.reduce(CGFloat.zero) { $0 + short * CGFloat($1.0.fontPercent / 100) * 1.32 }
@@ -159,7 +196,20 @@ enum WatermarkCustomRenderer {
         }
     }
 
-    private static func text(for component: WatermarkComponent, exif: PhotoExifInfo, path: String) -> String {
+    private static func text(for component: WatermarkComponent, exif: PhotoExifInfo, path: String,
+                             semiMetadata: SemiWatermarkRenderer.Metadata?) -> String {
+        if component.slot != nil, let semiMetadata {
+            switch component.kind {
+            case .camera: return semiMetadata.camera
+            case .lens: return semiMetadata.lens
+            case .parameters: return semiMetadata.parameters
+            case .date: return semiMetadata.date
+            case .folder: return semiMetadata.folder
+            case .folderAndDate: return "\(semiMetadata.folder)    \(semiMetadata.date)"
+            case .logo: return ""
+            case .customText: return component.text
+            }
+        }
         switch component.kind {
         case .camera: return exif.camera ?? "相机"
         case .lens: return exif.lens ?? ""

@@ -979,15 +979,7 @@ class PhotoStore: ObservableObject {
             var failures: [String] = []
             for (index, request) in requests.enumerated() {
                 do {
-                    switch request.style {
-                    case .custom(let configuration):
-                        try WatermarkService.export(photo: request.photo, configuration: configuration,
-                                                    sourcePath: request.sourcePath, to: directory)
-                    case .preset(let preset):
-                        try WatermarkService.export(photo: request.photo, preset: preset,
-                                                    sourcePath: request.sourcePath,
-                                                    matchOrientation: request.matchOrientation, to: directory)
-                    }
+                    try WatermarkService.export(request: request, to: directory)
                     exported += 1
                 } catch {
                     failures.append("\(request.photo.displayName)：\(error.localizedDescription)")
