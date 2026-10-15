@@ -27,18 +27,25 @@ struct VideoPlaybackView: View {
     }
 
     private var playbackHeader: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "play.rectangle.fill")
-            Text(displayName)
-                .lineLimit(1)
-                .truncationMode(.middle)
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Image(systemName: "play.rectangle.fill")
+                Text(displayName)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
 
-            Spacer(minLength: 8)
+                Spacer(minLength: 8)
 
-            Button(action: onExit) {
-                Label("退出播放模式", systemImage: "xmark")
+                Button(action: onExit) {
+                    Label("退出播放模式", systemImage: "xmark")
+                }
+                .help("退出播放模式 (V / Esc)")
             }
-            .help("退出播放模式 (V / Esc)")
+
+            Text("Space 播放/暂停 · ← → 跳转 · ⇧← ⇧→ 逐帧 · ↑ ↓ 音量")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .font(.caption)
         .padding(.horizontal, 14)

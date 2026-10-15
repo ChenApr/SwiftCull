@@ -344,7 +344,7 @@ struct PhotoDetailView: View {
                     if photo.movPath != nil {
                         Button { store.toggleVideoPlaybackMode(for: photo) } label: {
                             actionLabel(store.isVideoPlaybackMode && store.selectedPhoto?.id == photo.id
-                                        ? "退出播放 (V)" : "播放视频 (V)",
+                                        ? "退出播放" : "播放视频",
                                         systemImage: store.isVideoPlaybackMode && store.selectedPhoto?.id == photo.id
                                         ? "stop.circle" : "play.rectangle")
                         }
