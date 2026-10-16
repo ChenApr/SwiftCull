@@ -105,11 +105,11 @@ struct AsyncThumbnailView: View {
 
 struct DetailThumbnailView: View {
     let photo: PhotoEntry
-    var targetSize: CGFloat = 300
+    var targetSize: CGFloat = 1000
     @State private var image: NSImage?
 
     private var cacheId: String {
-        ThumbnailService.cacheKey(path: photo.primaryFilePath, size: targetSize, crop: photo.cropRect)
+        "detail|\(photo.primaryFilePath)|\(Int(targetSize.rounded()))|\(String(describing: photo.cropRect))"
     }
 
     var body: some View {
@@ -146,11 +146,56 @@ struct DetailThumbnailView: View {
         let path = photo.primaryImagePath.isEmpty ? (photo.movPath ?? "") : photo.primaryImagePath
         guard !path.isEmpty else { return }
 
-        let loaded = await ThumbnailService.shared.thumbnail(path: path, id: cacheId,
-                                                             size: targetSize, crop: photo.cropRect)
+        let loaded = await loadDetailImageBackground(
+            path: path,
+            isVideo: photo.isVideoOnly,
+            crop: photo.cropRect,
+            targetPixels: Int(targetSize * 2)
+        )
 
         guard !Task.isCancelled else { return }
         self.image = loaded
+    }
+
+    /// 大图预览使用独立的高分辨率解码路径，不能复用网格缩略图服务的尺寸上限。
+    /// 这样网格加载仍然受控，大图则可以按窗口尺寸和缩放级别读取足够的像素。
+    private nonisolated func loadDetailImageBackground(path: String, isVideo: Bool,
+                                                       crop: CropRect?, targetPixels: Int) async -> NSImage? {
+        if isVideo {
+            let service = ThumbnailService.shared
+            return await withCheckedContinuation { continuation in
+                service.generateThumbnail(path: path, id: "detail-video|\(path)", size: 800) { image in
+                    continuation.resume(returning: image)
+                }
+            }
+        }
+
+        if let crop {
+            guard let cgImage = try? CropImageService.image(path: path, crop: crop,
+                                                            maxPixelSize: targetPixels) else { return nil }
+            return NSImage(cgImage: cgImage,
+                           size: NSSize(width: cgImage.width, height: cgImage.height))
+        }
+
+        let url = URL(fileURLWithPath: path)
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+
+        let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
+        let originalWidth = properties?[kCGImagePropertyPixelWidth] as? CGFloat ?? 6000
+        let originalHeight = properties?[kCGImagePropertyPixelHeight] as? CGFloat ?? 4000
+        let maxPixelSize = max(originalWidth, originalHeight)
+        let options: [CFString: Any] = [
+            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCache: false,
+            kCGImageSourceShouldCacheImmediately: true
+        ]
+        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
+            return nil
+        }
+        return NSImage(cgImage: cgImage,
+                       size: NSSize(width: cgImage.width, height: cgImage.height))
     }
 }
 
