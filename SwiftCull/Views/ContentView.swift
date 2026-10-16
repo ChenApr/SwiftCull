@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 struct ContentView: View {
     @EnvironmentObject var store: PhotoStore
@@ -75,6 +76,9 @@ struct ContentView: View {
         .task {
             store.detectVolumes()
             await store.loadPhotos()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
+            store.flushPendingTagWrites()
         }
         .onChange(of: store.selectedPhoto?.id) { _, newId in
             if newId == nil {

@@ -215,7 +215,11 @@ struct PhotoSinglePreviewView: View {
             } else {
                 GeometryReader { geo in
                     DetailThumbnailView(photo: photo,
-                                        targetSize: max(geo.size.width, geo.size.height) * previewResolutionScale)
+                                        // Keep the previous 1800pt baseline for
+                                        // cropped previews, then request more as
+                                        // the viewport or zoom level requires.
+                                        targetSize: max(1800,
+                                                        max(geo.size.width, geo.size.height) * previewResolutionScale))
                         .scaleEffect(scale)
                         .offset(offset)
                         .frame(width: geo.size.width, height: geo.size.height)

@@ -89,6 +89,23 @@ class PhotoStore: ObservableObject {
 
     init() {}
 
+    /// Wait for queued Finder-tag writes before scanning metadata again. This
+    /// preserves the old read-after-write behavior without blocking the main
+    /// actor while the extended-attribute writes are in progress.
+    private func waitForTagWrites() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            tagWriteQueue.async {
+                continuation.resume()
+            }
+        }
+    }
+
+    /// Drain the utility queue before the process exits so a recent Finder-tag
+    /// change cannot be lost solely because it was moved off the main actor.
+    func flushPendingTagWrites() {
+        tagWriteQueue.sync {}
+    }
+
     private func buildPhotoIndexMap() -> [String: Int] {
         var map: [String: Int] = [:]
         map.reserveCapacity(photos.count)
@@ -308,8 +325,6 @@ class PhotoStore: ObservableObject {
         }
 
         copyStatus = "正在准备裁剪后的文件…"
-        // Prevent Finder from pasting a previous selection while this render is still running.
-        NSPasteboard.general.clearContents()
         Task { @MainActor in
             do {
                 let prepared = try await Task.detached(priority: .userInitiated) {
@@ -389,6 +404,8 @@ class PhotoStore: ObservableObject {
         isEnriching = false
         enrichProgress = 0
         enrichStatus = ""
+
+        await waitForTagWrites()
 
         if sourcePath.isEmpty {
             photos = []
@@ -1014,7 +1031,6 @@ class PhotoStore: ObservableObject {
     }
 
     func selectPhotoIds(_ ids: Set<String>) {
-        guard selectedPhotos != ids else { return }
         selectedPhotos = ids
         selectedPhoto = filteredPhotos.first { ids.contains($0.id) }
     }

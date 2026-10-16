@@ -668,6 +668,13 @@ private final class PhotoGroupCache {
         self.mode = mode
         self.ascending = ascending
 
+        if mode == .all {
+            cached = [PhotoGridSection(id: "all", title: "所有照片",
+                                       subtitle: "\(photos.count) 张",
+                                       photoIndices: Array(photos.indices))]
+            return cached
+        }
+
         let calendar = Calendar.current
         let granularity: Calendar.Component = mode == .month ? .month : .day
         let components: Set<Calendar.Component> = mode == .month ? [.year, .month] : [.year, .month, .day]

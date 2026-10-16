@@ -171,8 +171,14 @@ struct DetailThumbnailView: View {
         }
 
         if let crop {
+            // ImageIO applies maxPixelSize before the crop. Scale the source
+            // request by the smallest crop dimension so the visible crop can
+            // still reach the requested display resolution. The source size
+            // remains the hard upper bound inside CropImageService.
+            let fraction = max(0.001, min(crop.normalized.width, crop.normalized.height))
+            let sourceMaxPixelSize = Int((Double(targetPixels) / fraction).rounded(.up))
             guard let cgImage = try? CropImageService.image(path: path, crop: crop,
-                                                            maxPixelSize: targetPixels) else { return nil }
+                                                            maxPixelSize: sourceMaxPixelSize) else { return nil }
             return NSImage(cgImage: cgImage,
                            size: NSSize(width: cgImage.width, height: cgImage.height))
         }

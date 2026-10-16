@@ -234,7 +234,10 @@ final class ThumbnailService: @unchecked Sendable {
         let videoExtensions: Set<String> = ["mov", "mp4", "avi"]
         var shouldPersist = false
 
-        var image = loadFromDiskCache(id: id)
+        // Cropped renders may have been written by an earlier build as JPEGs.
+        // Never read those files back: decode the source crop again so a lossy
+        // cache entry cannot become the visible or exported image.
+        var image = crop == nil ? loadFromDiskCache(id: id) : nil
         if image == nil {
             if let crop {
                 // ImageIO's limit applies before cropping. Account for a small crop's
@@ -250,7 +253,11 @@ final class ThumbnailService: @unchecked Sendable {
             } else {
                 image = Self.createThumbnail(path: path, maxSize: size)
             }
-            shouldPersist = image != nil
+            // Cropped renders are kept in memory for the current request. Do
+            // not persist them as JPEGs: that introduces an avoidable lossy
+            // round trip for a render that may be used for export or preview.
+            // Uncropped grid thumbnails retain the bounded disk cache.
+            shouldPersist = image != nil && crop == nil
         }
 
         if let image, isCurrentGeneration(requestGeneration), hasActiveWaiters(id: id, generation: requestGeneration) {
