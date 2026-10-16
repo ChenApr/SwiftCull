@@ -61,6 +61,17 @@ struct ContentView: View {
         .sheet(item: $store.livePhotoEditorPhoto) { photo in
             LivePhotoExportView(photo: photo, initialTime: store.livePhotoInitialTime)
         }
+        .overlay(alignment: .top) {
+            if let status = store.copyStatus {
+                Text(status)
+                    .font(.caption.weight(.semibold))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 9)
+                    .background(.regularMaterial, in: Capsule())
+                    .padding(.top, 8)
+                    .allowsHitTesting(false)
+            }
+        }
         .task {
             store.detectVolumes()
             await store.loadPhotos()

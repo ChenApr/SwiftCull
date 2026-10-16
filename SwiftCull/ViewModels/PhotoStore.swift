@@ -41,6 +41,7 @@ class PhotoStore: ObservableObject {
     @Published var isExporting = false
     @Published var exportProgress: Double = 0
     @Published var exportMessage: String?
+    @Published var copyStatus: String?
     @Published var viewMode: PhotoViewMode = .grid {
         didSet {
             if viewMode != .single { exitVideoPlaybackMode() }
@@ -64,7 +65,9 @@ class PhotoStore: ObservableObject {
     private let thumbnailService = ThumbnailService.shared
     let finderTagService = FinderTagService.shared
     private let projectMetadata = ProjectMetadataService.shared
+    private let tagWriteQueue = DispatchQueue(label: "com.swiftcull.tag-writes", qos: .utility)
     private var sidecarEntries: [String: PhotoMetadata] = [:]
+    private var latestCopyID = UUID()
 
     /// 选择模式下被编辑过的照片在编辑前的原始状态（用于「取消」纯内存回滚，零磁盘 IO）
     private struct OriginalPhotoState {
@@ -286,13 +289,42 @@ class PhotoStore: ObservableObject {
     func copyOriginalFiles(clicked photo: PhotoEntry? = nil, useSelection: Bool = true) -> Bool {
         let targets = contextPhotos(clicked: photo, useSelection: useSelection)
         guard !targets.isEmpty else { return false }
-        do {
-            _ = try CropClipboardService.copy(targets)
-            return true
-        } catch {
-            exportMessage = "复制裁剪照片失败：\(error.localizedDescription)"
-            return false
+        let copyID = UUID()
+        latestCopyID = copyID
+        copyStatus = nil
+        guard targets.contains(where: { $0.cropRect != nil || $0.isVersionCopy }) else {
+            do {
+                _ = try CropClipboardService.copy(targets)
+                return true
+            } catch {
+                exportMessage = "复制照片失败：\(error.localizedDescription)"
+                return false
+            }
         }
+
+        copyStatus = "正在准备裁剪后的文件…"
+        // Prevent Finder from pasting a previous selection while this render is still running.
+        NSPasteboard.general.clearContents()
+        Task { @MainActor in
+            do {
+                let prepared = try await Task.detached(priority: .userInitiated) {
+                    try CropClipboardService.prepare(targets)
+                }.value
+                guard latestCopyID == copyID else {
+                    CropClipboardService.discard(prepared)
+                    return
+                }
+                _ = try CropClipboardService.commit(prepared)
+                copyStatus = "已复制裁剪后的文件，可在 Finder 中粘贴"
+                try? await Task.sleep(for: .seconds(3))
+                if latestCopyID == copyID { copyStatus = nil }
+            } catch {
+                guard latestCopyID == copyID else { return }
+                copyStatus = nil
+                exportMessage = "复制裁剪照片失败：\(error.localizedDescription)"
+            }
+        }
+        return true
     }
 
     func contextSetRating(_ rating: Int, clicked photo: PhotoEntry, useSelection: Bool = true) {
@@ -374,12 +406,23 @@ class PhotoStore: ObservableObject {
         loadingProgress = 0.4
 
         // 第一阶段：快速列出文件（文件系统日期），立即展示网格
-        let fast = await fileService.scanFilesFast(at: sourcePath)
+        let folderPath = sourcePath
+        let fast = await fileService.scanFilesFast(at: folderPath)
         guard currentLoadID == loadID else { isLoading = false; return }
 
-        // 立即读取评分（UserDefaults，很快）与 sidecar 星级，让网格第一时间可用
-        sidecarEntries = projectMetadata.load(from: sourcePath)
-        cropVersions = CropCatalog.load(folder: sourcePath)
+        // Both metadata files may live on a slow card. Read them off the main actor.
+        let metadataService = projectMetadata
+        let metadataTask = Task.detached(priority: .utility) {
+            metadataService.load(from: folderPath)
+        }
+        let cropTask = Task.detached(priority: .utility) {
+            CropCatalog.load(folder: folderPath)
+        }
+        let loadedMetadata = await metadataTask.value
+        let loadedCrops = await cropTask.value
+        guard currentLoadID == loadID else { return }
+        sidecarEntries = loadedMetadata
+        cropVersions = loadedCrops
         var initial = fast.flatMap { source -> [PhotoEntry] in
             let versions = cropVersions[source.sourceID] ?? [CropVersion(id: nil, name: nil, crop: nil)]
             let main = versions.first(where: { $0.id == nil }) ?? CropVersion(id: nil, name: nil, crop: nil)
@@ -626,8 +669,15 @@ class PhotoStore: ObservableObject {
 
     func clearTags(for photo: PhotoEntry) {
         guard let index = photos.firstIndex(where: { $0.id == photo.id }) else { return }
-        _ = tagService.setTagsForPhotoPair([], photo: photos[index])
+        scheduleTagWrite([], for: photos[index])
         setSharedTags([], sourceID: photo.sourceID)
+    }
+
+    private func scheduleTagWrite(_ tags: [String], for photo: PhotoEntry) {
+        let colorLookup = tagColorLookup
+        tagWriteQueue.async {
+            _ = TagService.shared.setTagsForPhotoPair(tags, photo: photo, colorLookup: colorLookup)
+        }
     }
 
     private func setSharedTags(_ tags: [String], sourceID: String) {
@@ -793,7 +843,7 @@ class PhotoStore: ObservableObject {
         var currentTags = photos[index].tags
         if !currentTags.contains(tag) {
             currentTags.append(tag)
-            _ = tagService.setTagsForPhotoPair(currentTags, photo: photos[index], colorLookup: tagColorLookup)
+            scheduleTagWrite(currentTags, for: photos[index])
             setSharedTags(currentTags, sourceID: photo.sourceID)
         }
     }
@@ -802,7 +852,7 @@ class PhotoStore: ObservableObject {
         guard let index = photos.firstIndex(where: { $0.id == photo.id }) else { return }
         var currentTags = photos[index].tags
         currentTags.removeAll { $0 == tag }
-        _ = tagService.setTagsForPhotoPair(currentTags, photo: photos[index], colorLookup: tagColorLookup)
+        scheduleTagWrite(currentTags, for: photos[index])
         setSharedTags(currentTags, sourceID: photo.sourceID)
     }
 
@@ -872,7 +922,7 @@ class PhotoStore: ObservableObject {
 
         // 评分落盘（UserDefaults，很快）；标签写扩展属性（较慢）放后台
         let colorLookup = tagColorLookup
-        Task.detached(priority: .utility) {
+        tagWriteQueue.async {
             let ratingService = RatingService.shared
             let tagService = TagService.shared
             for write in pending {
