@@ -55,6 +55,7 @@ final class ThumbnailService: @unchecked Sendable {
     private let stateQueue = DispatchQueue(label: "com.swiftcull.thumbnail.state")
     private let generationSemaphore = DispatchSemaphore(value: 4)
     private var inProgress: [String: PendingRequest] = [:]
+    private var preheatWaiters: [Waiter] = []
     private var generation = 0
 
     private let diskCacheDir: URL
@@ -147,6 +148,7 @@ final class ThumbnailService: @unchecked Sendable {
             generation += 1
             let waiters = inProgress.values.flatMap(\.waiters)
             inProgress.removeAll()
+            preheatWaiters.removeAll()
             return waiters
         }
         waiters.forEach { $0.resolve(nil) }
@@ -194,6 +196,12 @@ final class ThumbnailService: @unchecked Sendable {
     }
 
     func preloadThumbnails(paths: [(path: String, crop: CropRect?)], size: CGFloat) {
+        let obsolete = stateQueue.sync { () -> [Waiter] in
+            let old = preheatWaiters
+            preheatWaiters = []
+            return old
+        }
+        obsolete.forEach { $0.resolve(nil) }
         let items = paths
             .filter { !$0.path.isEmpty && getCached(Self.cacheKey(path: $0.path, size: size, crop: $0.crop)) == nil }
             .prefix(80)
@@ -201,6 +209,7 @@ final class ThumbnailService: @unchecked Sendable {
         for item in items {
             let waiter = Waiter()
             waiter.setCompletion { _ in }
+            stateQueue.sync { preheatWaiters.append(waiter) }
             enqueue(path: item.path, id: Self.cacheKey(path: item.path, size: size, crop: item.crop),
                     size: size, crop: item.crop, waiter: waiter, preheat: true)
         }
@@ -263,7 +272,11 @@ final class ThumbnailService: @unchecked Sendable {
     private func begin(id: String, generation requestGeneration: Int) -> Bool {
         stateQueue.sync {
             guard var pending = inProgress[id], pending.generation == requestGeneration,
-                  !pending.started, pending.waiters.contains(where: \.isActive) else { return false }
+                  !pending.started else { return false }
+            guard pending.waiters.contains(where: \.isActive) else {
+                inProgress.removeValue(forKey: id)
+                return false
+            }
             pending.started = true
             inProgress[id] = pending
             return true

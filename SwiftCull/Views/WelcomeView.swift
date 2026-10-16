@@ -194,6 +194,15 @@ struct PhotoSinglePreviewView: View {
     private let minScale: CGFloat = 1
     private let maxScale: CGFloat = 6
 
+    /// Only request a sharper decode when zoom crosses a useful resolution tier.
+    /// Pinching should not start a new image read for every fractional scale value.
+    private var previewResolutionScale: CGFloat {
+        if scale > 4 { return 6 }
+        if scale > 2 { return 4 }
+        if scale > 1 { return 2 }
+        return 1
+    }
+
     var body: some View {
         ZStack {
             background
@@ -206,7 +215,7 @@ struct PhotoSinglePreviewView: View {
             } else {
                 GeometryReader { geo in
                     DetailThumbnailView(photo: photo,
-                                        targetSize: max(geo.size.width, geo.size.height) * scale)
+                                        targetSize: max(geo.size.width, geo.size.height) * previewResolutionScale)
                         .scaleEffect(scale)
                         .offset(offset)
                         .frame(width: geo.size.width, height: geo.size.height)

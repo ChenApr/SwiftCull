@@ -29,8 +29,10 @@ enum ThumbnailPipelineSmoke {
         let cropKey = ThumbnailService.cacheKey(path: source.path, size: 128, crop: crop)
         precondition(key != cropKey)
 
+        service.preloadThumbnails(paths: [(path: source.path, crop: nil)], size: 128)
         let normal = await service.thumbnail(path: source.path, id: key, size: 128)
         precondition(normal != nil && normal!.size.width <= 256)
+        service.preloadThumbnails(paths: [(path: source.path, crop: crop)], size: 128)
         let cropped = await service.thumbnail(path: source.path, id: cropKey, size: 128, crop: crop)
         precondition(cropped != nil && cropped!.size.width >= 200)
         precondition(service.getCached(cropKey) != nil)
