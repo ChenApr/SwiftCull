@@ -243,7 +243,10 @@ final class ThumbnailService: @unchecked Sendable {
                 // ImageIO's limit applies before cropping. Account for a small crop's
                 // fraction of the source so the final card still has enough pixels.
                 let fraction = max(0.001, min(crop.normalized.width, crop.normalized.height))
-                let maxPixels = Int((size * 2 / fraction).rounded(.up))
+                // Cropped grid cards previously decoded at 3x the quantized
+                // display size. Keep that fidelity while compensating for the
+                // crop being applied after ImageIO downsampling.
+                let maxPixels = Int((size * 3 / fraction).rounded(.up))
                 if let cgImage = try? CropImageService.image(path: path, crop: crop, maxPixelSize: maxPixels) {
                     image = NSImage(cgImage: cgImage,
                                     size: NSSize(width: cgImage.width, height: cgImage.height))
