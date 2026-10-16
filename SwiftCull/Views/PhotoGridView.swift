@@ -648,7 +648,57 @@ struct PhotoGridSection: Identifiable {
     let id: String
     let title: String
     let subtitle: String
-    let photos: [PhotoEntry]
+    let photoIndices: [Int]
+}
+
+/// The layout is stable while selection and marks change. Store only indices so cards
+/// always read the current PhotoEntry rather than a stale cached rating or tag.
+private final class PhotoGroupCache {
+    private var version = -1
+    private var mode: PhotoGroupingMode = .all
+    private var ascending = true
+    private var cached: [PhotoGridSection] = []
+
+    func sections(photos: [PhotoEntry], version: Int, mode: PhotoGroupingMode,
+                  ascending: Bool) -> [PhotoGridSection] {
+        guard version != self.version || mode != self.mode || ascending != self.ascending else {
+            return cached
+        }
+        self.version = version
+        self.mode = mode
+        self.ascending = ascending
+
+        let calendar = Calendar.current
+        let granularity: Calendar.Component = mode == .month ? .month : .day
+        let components: Set<Calendar.Component> = mode == .month ? [.year, .month] : [.year, .month, .day]
+        let titleFormatter = DateFormatter()
+        titleFormatter.locale = Locale(identifier: "zh_CN")
+        titleFormatter.dateFormat = mode == .month ? "yyyy年M月" : "yyyy年M月d日"
+        let weekdayFormatter = DateFormatter()
+        weekdayFormatter.locale = Locale(identifier: "zh_CN")
+        weekdayFormatter.dateFormat = "EEEE"
+
+        var grouped: [Date: [Int]] = [:]
+        for index in photos.indices {
+            let date = photos[index].fileDate
+            let key = calendar.date(from: calendar.dateComponents(components, from: date)) ?? date
+            grouped[key, default: []].append(index)
+        }
+        cached = grouped.keys.sorted(by: ascending ? (<) : (>)).map { date in
+            let indices = (grouped[date] ?? []).sorted {
+                ascending ? photos[$0].fileDate < photos[$1].fileDate
+                          : photos[$0].fileDate > photos[$1].fileDate
+            }
+            let count = indices.count
+            return PhotoGridSection(
+                id: "\(granularity)-\(date.timeIntervalSince1970)",
+                title: titleFormatter.string(from: date),
+                subtitle: mode == .day ? "\(weekdayFormatter.string(from: date)) · \(count) 张" : "\(count) 张",
+                photoIndices: indices
+            )
+        }
+        return cached
+    }
 }
 
 private struct PhotoGroupHeader: View {
@@ -706,6 +756,7 @@ struct PhotoGridContent: View {
     @State private var lastDragUpdateTime: CFAbsoluteTime = 0
     @State private var didDragSelect = false
     @State private var watermarkSelection: WatermarkPhotoSelection?
+    @State private var groupCache = PhotoGroupCache()
 
     private let gridCoordinateSpace = "photo-grid-space"
 
@@ -732,14 +783,10 @@ struct PhotoGridContent: View {
     }
 
     private var photoGroups: [PhotoGridSection] {
-        switch groupingMode {
-        case .all:
-            return [PhotoGridSection(id: "all", title: "所有照片", subtitle: "\(store.filteredPhotos.count) 张", photos: store.filteredPhotos)]
-        case .month:
-            return makePhotoGroups(granularity: .month)
-        case .day:
-            return makePhotoGroups(granularity: .day)
-        }
+        groupCache.sections(photos: store.filteredPhotos,
+                            version: store.filteredPhotosVersion,
+                            mode: groupingMode,
+                            ascending: store.filterOptions.sortAscending)
     }
 
     var body: some View {
@@ -754,8 +801,8 @@ struct PhotoGridContent: View {
                         } else {
                             ForEach(photoGroups) { group in
                                 Section {
-                                    ForEach(group.photos) { photo in
-                                        photoCard(photo)
+                                    ForEach(group.photoIndices, id: \.self) { index in
+                                        photoCard(store.filteredPhotos[index])
                                     }
                                 } header: {
                                     PhotoGroupHeader(
@@ -871,52 +918,13 @@ struct PhotoGridContent: View {
         )
     }
 
-    private func makePhotoGroups(granularity: Calendar.Component) -> [PhotoGridSection] {
-        let calendar = Calendar.current
-        let grouped = Dictionary(grouping: store.filteredPhotos) { photo in
-            let components: Set<Calendar.Component> = granularity == .month ? [.year, .month] : [.year, .month, .day]
-            return calendar.date(from: calendar.dateComponents(components, from: photo.fileDate)) ?? photo.fileDate
-        }
-
-        let ascending = store.filterOptions.sortAscending
-        return grouped.keys.sorted(by: ascending ? (<) : (>)).map { date in
-            let photos = (grouped[date] ?? []).sorted {
-                ascending ? $0.fileDate < $1.fileDate : $0.fileDate > $1.fileDate
-            }
-            let title = groupTitle(for: date, granularity: granularity)
-            let subtitle = groupSubtitle(for: date, photos: photos, granularity: granularity)
-            return PhotoGridSection(
-                id: "\(granularity)-\(date.timeIntervalSince1970)",
-                title: title,
-                subtitle: subtitle,
-                photos: photos
-            )
-        }
-    }
-
-    private func groupTitle(for date: Date, granularity: Calendar.Component) -> String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "zh_CN")
-        formatter.dateFormat = granularity == .month ? "yyyy年M月" : "yyyy年M月d日"
-        return formatter.string(from: date)
-    }
-
-    private func groupSubtitle(for date: Date, photos: [PhotoEntry], granularity: Calendar.Component) -> String {
-        guard granularity == .day else { return "\(photos.count) 张" }
-
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "zh_CN")
-        formatter.dateFormat = "EEEE"
-        return "\(formatter.string(from: date)) · \(photos.count) 张"
-    }
-
     private func isGroupSelected(_ group: PhotoGridSection) -> Bool {
-        let ids = Set(group.photos.map(\.id))
+        let ids = Set(group.photoIndices.map { store.filteredPhotos[$0].id })
         return !ids.isEmpty && ids.isSubset(of: store.selectedPhotos)
     }
 
     private func toggleGroupSelection(_ group: PhotoGridSection) {
-        let ids = Set(group.photos.map(\.id))
+        let ids = Set(group.photoIndices.map { store.filteredPhotos[$0].id })
         guard !ids.isEmpty else { return }
 
         if ids.isSubset(of: store.selectedPhotos) {

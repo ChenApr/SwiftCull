@@ -81,6 +81,7 @@ class PhotoStore: ObservableObject {
     private var lastPreheatKey: String?
     /// filteredPhotos 的 id→下标缓存，随 applyFilters 重建，供滚动预热/方向键导航 O(1) 定位。
     private var filteredIndexById: [String: Int] = [:]
+    private var cachedTotalSize = ByteCountFormatter.string(fromByteCount: 0, countStyle: .file)
     private var tagColorLookup: [String: Int] {
         finderTagService.tagColorLookup
     }
@@ -108,9 +109,12 @@ class PhotoStore: ObservableObject {
     var photoCount: Int { filteredPhotos.count }
     var totalPhotoCount: Int { photos.count }
 
-    var totalSize: String {
-        let uniquePhotos = Dictionary(grouping: filteredPhotos, by: \.sourceID).values.compactMap(\.first)
-        let total = uniquePhotos.reduce(Int64(0)) { total, photo in
+    var totalSize: String { cachedTotalSize }
+
+    private func calculateTotalSize() -> String {
+        var seenSources: Set<String> = []
+        let total = filteredPhotos.reduce(Int64(0)) { total, photo in
+            guard seenSources.insert(photo.sourceID).inserted else { return total }
             switch filterOptions.fileTypeFilter {
             case .jpgOnly:
                 return total + (photo.jpgFileSize ?? 0)
@@ -386,6 +390,7 @@ class PhotoStore: ObservableObject {
         if sourcePath.isEmpty {
             photos = []
             filteredPhotos = []
+            cachedTotalSize = ByteCountFormatter.string(fromByteCount: 0, countStyle: .file)
             filteredPhotosVersion &+= 1
             isLoading = false
             loadingProgress = 0
@@ -631,6 +636,7 @@ class PhotoStore: ObservableObject {
 
         filteredPhotos = sortPhotos(result)
         filteredIndexById = buildFilteredIndexMap()
+        cachedTotalSize = calculateTotalSize()
         filteredPhotosVersion &+= 1
     }
 
@@ -987,6 +993,7 @@ class PhotoStore: ObservableObject {
     }
 
     func selectPhotoIds(_ ids: Set<String>) {
+        guard selectedPhotos != ids else { return }
         selectedPhotos = ids
         selectedPhoto = filteredPhotos.first { ids.contains($0.id) }
     }
