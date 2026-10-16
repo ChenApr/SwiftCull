@@ -882,6 +882,13 @@ struct PhotoGridContent: View {
             isPrimary: store.selectedPhoto?.id == photo.id,
             isSelectMode: isSelectMode
         )
+        // Cards own click selection. Keeping this separate from the grid's drag gesture
+        // avoids coordinate-space hit-test failures that otherwise make a click a no-op.
+        .contentShape(Rectangle())
+        .onTapGesture {
+            resignTextInputFocus()
+            handleTap(photo: photo)
+        }
         .overlay(alignment: .bottomTrailing) {
             let count = store.versionCount(for: photo)
             if !photo.isVersionCopy && count > 1 {
@@ -939,22 +946,15 @@ struct PhotoGridContent: View {
         }
     }
 
-    /// 命中反查：点击落点对应的照片
-    private func handleTap(at point: CGPoint) {
-        guard let id = frameStore.frames.first(where: { $0.value.contains(point) })?.key,
-              let photo = store.filteredPhotos.first(where: { $0.id == id }) else { return }
-        handleTap(photo: photo)
-    }
-
-    /// 统一的网格交互手势：同一个手势同时处理「点击选中」与「拖拽框选」，
-    /// 从根本上避免与卡片点击竞争。位移超过阈值判定为框选，否则松手时按点击处理。
+    /// 网格只负责拖拽框选。单击由卡片自身处理，避免依赖帧缓存做坐标反查。
     private var gridInteractionGesture: some Gesture {
-        DragGesture(minimumDistance: 0, coordinateSpace: .named(gridCoordinateSpace))
+        DragGesture(minimumDistance: 6, coordinateSpace: .named(gridCoordinateSpace))
             .onChanged { value in
                 if !didDragSelect {
                     let dx = value.location.x - value.startLocation.x
                     let dy = value.location.y - value.startLocation.y
                     guard dx * dx + dy * dy >= 36 else { return }
+                    resignTextInputFocus()
                     didDragSelect = true
                     dragStart = value.startLocation
                     dragBaselineSelection = store.selectedPhotos
@@ -964,14 +964,12 @@ struct PhotoGridContent: View {
                 dragCurrent = value.location
                 updateDragSelection()
             }
-            .onEnded { value in
+            .onEnded { _ in
                 if didDragSelect {
                     updateDragSelection(force: true)
                     if store.selectedCount > 0, !store.isSelectMode {
                         store.enterSelectMode()
                     }
-                } else {
-                    handleTap(at: value.startLocation)
                 }
                 dragStart = nil
                 dragCurrent = nil
@@ -979,6 +977,12 @@ struct PhotoGridContent: View {
                 dragBaselineSelection = []
                 dragSelectionMode = .replace
             }
+    }
+
+    @MainActor
+    private func resignTextInputFocus() {
+        guard KeyboardShortcutHandler.isTextFieldFocused else { return }
+        NSApp.keyWindow?.makeFirstResponder(nil)
     }
 
     private var currentDragSelectionMode: DragSelectionMode {
