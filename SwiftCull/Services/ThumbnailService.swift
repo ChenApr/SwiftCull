@@ -7,13 +7,51 @@ import ImageIO
 final class ThumbnailService: @unchecked Sendable {
     static let shared = ThumbnailService()
 
+    /// Every caller, including preheating, uses the same key for the same rendered image.
+    static func cacheKey(path: String, size: CGFloat, crop: CropRect? = nil) -> String {
+        "\(path)|\(quantizedSize(size))|\(String(describing: crop))"
+    }
+
+    private final class Waiter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var completion: (@MainActor @Sendable (NSImage?) -> Void)?
+        private var resolved = false
+
+        func setCompletion(_ callback: @escaping @MainActor @Sendable (NSImage?) -> Void) {
+            lock.lock()
+            let alreadyResolved = resolved
+            if !alreadyResolved { completion = callback }
+            lock.unlock()
+            if alreadyResolved { Task { @MainActor in callback(nil) } }
+        }
+
+        var isActive: Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            return !resolved
+        }
+
+        func resolve(_ image: NSImage?) {
+            lock.lock()
+            guard !resolved else { lock.unlock(); return }
+            resolved = true
+            let callback = completion
+            completion = nil
+            lock.unlock()
+            if let callback { Task { @MainActor in callback(image) } }
+        }
+    }
+
     private struct PendingRequest {
         let generation: Int
-        var completions: [@MainActor @Sendable (NSImage?) -> Void]
+        var waiters: [Waiter]
+        var started = false
     }
 
     private let cache = NSCache<NSString, NSImage>()
     private let workQueue = DispatchQueue(label: "com.swiftcull.thumbnail.work", qos: .userInitiated, attributes: .concurrent)
+    private let preheatQueue = DispatchQueue(label: "com.swiftcull.thumbnail.preheat", qos: .utility)
+    private let diskWriteQueue = DispatchQueue(label: "com.swiftcull.thumbnail.disk", qos: .utility)
     private let stateQueue = DispatchQueue(label: "com.swiftcull.thumbnail.state")
     private let generationSemaphore = DispatchSemaphore(value: 4)
     private var inProgress: [String: PendingRequest] = [:]
@@ -45,52 +83,73 @@ final class ThumbnailService: @unchecked Sendable {
         cache.object(forKey: id as NSString)
     }
 
-    func thumbnail(path: String, id: String, size: CGFloat) async -> NSImage? {
+    func thumbnail(path: String, id: String, size: CGFloat, crop: CropRect? = nil) async -> NSImage? {
         if let cached = getCached(id) {
             return cached
         }
 
-        return await withCheckedContinuation { continuation in
-            generateThumbnail(path: path, id: id, size: size) { image in
-                continuation.resume(returning: image)
+        let waiter = Waiter()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                waiter.setCompletion { image in continuation.resume(returning: image) }
+                enqueue(path: path, id: id, size: size, crop: crop, waiter: waiter, preheat: false)
             }
+        } onCancel: {
+            waiter.resolve(nil)
         }
     }
 
-    func generateThumbnail(path: String, id: String, size: CGFloat, completion: @escaping @MainActor @Sendable (NSImage?) -> Void) {
+    func generateThumbnail(path: String, id: String, size: CGFloat, crop: CropRect? = nil,
+                           completion: @escaping @MainActor @Sendable (NSImage?) -> Void) {
+        let waiter = Waiter()
+        waiter.setCompletion(completion)
+        enqueue(path: path, id: id, size: size, crop: crop, waiter: waiter, preheat: false)
+    }
+
+    private func enqueue(path: String, id: String, size: CGFloat, crop: CropRect?, waiter: Waiter,
+                         preheat: Bool) {
+        guard waiter.isActive else { return }
         if let cached = getCached(id) {
-            Task { @MainActor in
-                completion(cached)
-            }
+            waiter.resolve(cached)
             return
         }
 
         var requestGeneration = 0
+        var promote = false
         let shouldStart = stateQueue.sync {
+            guard waiter.isActive else { return false }
             if var pending = inProgress[id] {
-                pending.completions.append(completion)
+                pending.waiters.append(waiter)
+                if !preheat && !pending.started {
+                    promote = true
+                    requestGeneration = pending.generation
+                }
                 inProgress[id] = pending
                 return false
             }
 
             requestGeneration = generation
-            inProgress[id] = PendingRequest(generation: requestGeneration, completions: [completion])
+            inProgress[id] = PendingRequest(generation: requestGeneration, waiters: [waiter])
             return true
         }
 
-        guard shouldStart else { return }
+        guard shouldStart || promote else { return }
 
         let generationForRequest = requestGeneration
-        workQueue.async { [weak self] in
-            self?.produceThumbnail(path: path, id: id, size: size, generation: generationForRequest)
+        let queue = preheat ? preheatQueue : workQueue
+        queue.async { [weak self] in
+            self?.produceThumbnail(path: path, id: id, size: size, crop: crop, generation: generationForRequest)
         }
     }
 
     func cancelPending() {
-        stateQueue.sync {
+        let waiters = stateQueue.sync { () -> [Waiter] in
             generation += 1
+            let waiters = inProgress.values.flatMap(\.waiters)
             inProgress.removeAll()
+            return waiters
         }
+        waiters.forEach { $0.resolve(nil) }
     }
 
     func clearInMemoryCache() {
@@ -134,21 +193,31 @@ final class ThumbnailService: @unchecked Sendable {
         }
     }
 
-    func preloadThumbnails(paths: [(id: String, path: String)], size: CGFloat) {
+    func preloadThumbnails(paths: [(path: String, crop: CropRect?)], size: CGFloat) {
         let items = paths
-            .filter { !$0.path.isEmpty && getCached($0.id) == nil }
+            .filter { !$0.path.isEmpty && getCached(Self.cacheKey(path: $0.path, size: size, crop: $0.crop)) == nil }
             .prefix(80)
 
         for item in items {
-            generateThumbnail(path: item.path, id: item.id, size: size) { _ in }
+            let waiter = Waiter()
+            waiter.setCompletion { _ in }
+            enqueue(path: item.path, id: Self.cacheKey(path: item.path, size: size, crop: item.crop),
+                    size: size, crop: item.crop, waiter: waiter, preheat: true)
         }
     }
 
-    private func produceThumbnail(path: String, id: String, size: CGFloat, generation requestGeneration: Int) {
+    private func produceThumbnail(path: String, id: String, size: CGFloat, crop: CropRect?,
+                                  generation requestGeneration: Int) {
+        guard begin(id: id, generation: requestGeneration) else { return }
         generationSemaphore.wait()
         defer { generationSemaphore.signal() }
 
         guard isCurrentGeneration(requestGeneration) else {
+            return
+        }
+
+        guard hasActiveWaiters(id: id, generation: requestGeneration) else {
+            _ = finish(id: id, generation: requestGeneration)
             return
         }
 
@@ -158,7 +227,16 @@ final class ThumbnailService: @unchecked Sendable {
 
         var image = loadFromDiskCache(id: id)
         if image == nil {
-            if videoExtensions.contains(ext) {
+            if let crop {
+                // ImageIO's limit applies before cropping. Account for a small crop's
+                // fraction of the source so the final card still has enough pixels.
+                let fraction = max(0.001, min(crop.normalized.width, crop.normalized.height))
+                let maxPixels = Int((size * 2 / fraction).rounded(.up))
+                if let cgImage = try? CropImageService.image(path: path, crop: crop, maxPixelSize: maxPixels) {
+                    image = NSImage(cgImage: cgImage,
+                                    size: NSSize(width: cgImage.width, height: cgImage.height))
+                }
+            } else if videoExtensions.contains(ext) {
                 image = Self.createVideoThumbnail(path: path, maxSize: size)
             } else {
                 image = Self.createThumbnail(path: path, maxSize: size)
@@ -166,20 +244,36 @@ final class ThumbnailService: @unchecked Sendable {
             shouldPersist = image != nil
         }
 
-        if let image {
+        if let image, isCurrentGeneration(requestGeneration), hasActiveWaiters(id: id, generation: requestGeneration) {
             cache.setObject(image, forKey: id as NSString, cost: Self.cost(for: image))
-            if shouldPersist {
-                saveToDiskCache(image: image, id: id)
-            }
         }
 
-        let completions = finish(id: id, generation: requestGeneration)
-        guard !completions.isEmpty else { return }
+        let waiters = finish(id: id, generation: requestGeneration)
+        let delivered = isCurrentGeneration(requestGeneration) ? image : nil
+        waiters.forEach { $0.resolve(delivered) }
 
-        Task { @MainActor in
-            for completion in completions {
-                completion(image)
+        // Display immediately; JPEG encoding and disk I/O are outside the visible request path.
+        if shouldPersist, let image, !waiters.isEmpty, isCurrentGeneration(requestGeneration) {
+            diskWriteQueue.async { [weak self] in
+                self?.saveToDiskCache(image: image, id: id)
             }
+        }
+    }
+
+    private func begin(id: String, generation requestGeneration: Int) -> Bool {
+        stateQueue.sync {
+            guard var pending = inProgress[id], pending.generation == requestGeneration,
+                  !pending.started, pending.waiters.contains(where: \.isActive) else { return false }
+            pending.started = true
+            inProgress[id] = pending
+            return true
+        }
+    }
+
+    private func hasActiveWaiters(id: String, generation requestGeneration: Int) -> Bool {
+        stateQueue.sync {
+            guard let pending = inProgress[id], pending.generation == requestGeneration else { return false }
+            return pending.waiters.contains(where: \.isActive)
         }
     }
 
@@ -189,12 +283,12 @@ final class ThumbnailService: @unchecked Sendable {
         }
     }
 
-    private func finish(id: String, generation requestGeneration: Int) -> [@MainActor @Sendable (NSImage?) -> Void] {
+    private func finish(id: String, generation requestGeneration: Int) -> [Waiter] {
         stateQueue.sync {
             guard inProgress[id]?.generation == requestGeneration else {
                 return []
             }
-            return inProgress.removeValue(forKey: id)?.completions ?? []
+            return inProgress.removeValue(forKey: id)?.waiters ?? []
         }
     }
 

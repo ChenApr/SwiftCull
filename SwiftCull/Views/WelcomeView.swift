@@ -205,7 +205,8 @@ struct PhotoSinglePreviewView: View {
                                   onExit: { store.exitVideoPlaybackMode() })
             } else {
                 GeometryReader { geo in
-                    DetailThumbnailView(photo: photo, targetSize: 1800)
+                    DetailThumbnailView(photo: photo,
+                                        targetSize: max(geo.size.width, geo.size.height) * scale)
                         .scaleEffect(scale)
                         .offset(offset)
                         .frame(width: geo.size.width, height: geo.size.height)

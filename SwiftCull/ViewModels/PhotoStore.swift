@@ -538,7 +538,7 @@ class PhotoStore: ObservableObject {
         let upperBound = min(filteredPhotos.count, centerIndex + after + 1)
 
         let items = filteredPhotos[lowerBound..<upperBound].map { photo in
-            (id: "\(photo.primaryFilePath)|\(quantizedSize)", path: photo.primaryFilePath)
+            (path: photo.primaryFilePath, crop: photo.cropRect)
         }
         thumbnailService.preloadThumbnails(paths: items, size: CGFloat(quantizedSize))
     }
