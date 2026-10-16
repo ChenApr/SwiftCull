@@ -68,6 +68,7 @@ class PhotoStore: ObservableObject {
     private let tagWriteQueue = DispatchQueue(label: "com.swiftcull.tag-writes", qos: .utility)
     private var sidecarEntries: [String: PhotoMetadata] = [:]
     private var latestCopyID = UUID()
+    private var enrichmentTask: Task<Void, Never>?
 
     /// 选择模式下被编辑过的照片在编辑前的原始状态（用于「取消」纯内存回滚，零磁盘 IO）
     private struct OriginalPhotoState {
@@ -365,6 +366,8 @@ class PhotoStore: ObservableObject {
 
     func loadPhotos() async {
         let loadID = UUID()
+        enrichmentTask?.cancel()
+        enrichmentTask = nil
         currentLoadID = loadID
         lastPreheatKey = nil
         thumbnailService.cancelPending()
@@ -449,13 +452,22 @@ class PhotoStore: ObservableObject {
         guard !fast.isEmpty else { return }
 
         // 第二阶段：后台补充 EXIF 拍摄日期与 Finder 标签，完成后按拍摄日期平滑重排
-        await enrichPhotos(loadID: loadID)
+        let task = Task { [weak self] in
+            guard let self else { return }
+            await self.enrichPhotos(loadID: loadID)
+        }
+        enrichmentTask = task
+        await task.value
+        if currentLoadID == loadID {
+            enrichmentTask = nil
+        }
     }
 
     /// 后台补充拍摄日期与标签，带细粒度进度；完成后按最终拍摄日期重排
     private func enrichPhotos(loadID: UUID) async {
         let snapshot = photos
-        let total = snapshot.count
+        let sourceEntries = Dictionary(grouping: snapshot, by: \.sourceID).compactMap { $0.value.first }
+        let total = sourceEntries.count
         guard total > 0 else { return }
 
         isEnriching = true
@@ -463,59 +475,68 @@ class PhotoStore: ObservableObject {
         enrichStatus = "正在读取拍摄信息…"
 
         struct EnrichResult: Sendable {
-            let id: String
+            let sourceID: String
             let captureDate: Date?
             let tags: [String]
         }
 
-        let chunkSize = 100
-        let chunkCount = (total + chunkSize - 1) / chunkSize
-        var chunkResults = Array<[EnrichResult]?>(repeating: nil, count: chunkCount)
+        // A card is much slower at many concurrent metadata reads than at a small
+        // bounded stream. Keep visible thumbnail work ahead of this utility queue.
+        let maxConcurrentReads = 2
+        var results: [EnrichResult] = []
+        results.reserveCapacity(total)
         var completedCount = 0
 
-        await withTaskGroup(of: (Int, [EnrichResult]).self) { group in
-            for chunkIndex in 0..<chunkCount {
-                let startIndex = chunkIndex * chunkSize
-                let endIndex = min(startIndex + chunkSize, total)
-                let chunk = Array(snapshot[startIndex..<endIndex])
-                group.addTask(priority: .userInitiated) {
+        await withTaskGroup(of: EnrichResult?.self) { group in
+            var nextIndex = 0
+
+            func addNextRead() {
+                guard nextIndex < sourceEntries.count else { return }
+                let photo = sourceEntries[nextIndex]
+                nextIndex += 1
+                group.addTask(priority: .utility) {
+                    guard !Task.isCancelled else { return nil }
                     let tagService = TagService.shared
-                    let partial = chunk.map { photo in
-                        EnrichResult(
-                            id: photo.id,
-                            captureDate: FileService.captureDate(for: photo),
-                            tags: tagService.getTagsForPhotoPair(photo)
-                        )
-                    }
-                    return (chunkIndex, partial)
+                    return EnrichResult(
+                        sourceID: photo.sourceID,
+                        captureDate: FileService.captureDate(for: photo),
+                        tags: tagService.getTagsForPhotoPair(photo)
+                    )
                 }
             }
 
-            for await (chunkIndex, partial) in group {
-                guard currentLoadID == loadID else { break }
-                chunkResults[chunkIndex] = partial
+            for _ in 0..<min(maxConcurrentReads, sourceEntries.count) {
+                addNextRead()
+            }
+
+            while let result = await group.next() {
+                guard !Task.isCancelled, currentLoadID == loadID else {
+                    group.cancelAll()
+                    break
+                }
+                if let result {
+                    results.append(result)
+                }
                 completedCount += 1
-                enrichProgress = Double(completedCount) / Double(chunkCount)
-                enrichStatus = "正在读取拍摄信息 \(min(completedCount * chunkSize, total))/\(total)"
+                enrichProgress = Double(completedCount) / Double(total)
+                enrichStatus = "正在读取拍摄信息 \(completedCount)/\(total)"
+                addNextRead()
             }
         }
 
-        guard currentLoadID == loadID else { isEnriching = false; return }
+        guard !Task.isCancelled, currentLoadID == loadID else { isEnriching = false; return }
 
         var dateMap: [String: Date] = [:]
         var tagMap: [String: [String]] = [:]
-        for chunk in chunkResults {
-            guard let chunk else { continue }
-            for r in chunk {
-                if let d = r.captureDate { dateMap[r.id] = d }
-                tagMap[r.id] = r.tags
-            }
+        for result in results {
+            if let date = result.captureDate { dateMap[result.sourceID] = date }
+            tagMap[result.sourceID] = result.tags
         }
 
         var rebuilt: [PhotoEntry] = []
         rebuilt.reserveCapacity(photos.count)
         for photo in photos {
-            let exifDate = dateMap[photo.id]
+            let exifDate = dateMap[photo.sourceID]
             let needsRebuild = exifDate != nil && exifDate != photo.fileDate
             var updated: PhotoEntry
             if needsRebuild {
@@ -539,7 +560,7 @@ class PhotoStore: ObservableObject {
                 updated = photo
             }
             // 标签：未处于用户编辑中的照片，采用磁盘读取的最新标签
-            if editedOriginals[photo.id] == nil, let tags = tagMap[photo.id] {
+            if editedOriginals[photo.id] == nil, let tags = tagMap[photo.sourceID] {
                 updated.tags = tags
             }
             rebuilt.append(updated)
