@@ -188,15 +188,27 @@ enum CropClipboardService {
     static func copy(_ photos: [PhotoEntry], to pasteboard: NSPasteboard = .general,
                      stagingRoot: URL? = nil) throws -> [URL] {
         let prepared = try prepare(photos, stagingRoot: stagingRoot)
+        return try commit(prepared, to: pasteboard)
+    }
+
+    static func commit(_ prepared: PreparedFiles, to pasteboard: NSPasteboard = .general) throws -> [URL] {
         pasteboard.clearContents()
         guard pasteboard.writeObjects(prepared.urls.map { $0 as NSURL }) else {
-            if let directory = prepared.stagingDirectory { try? FileManager.default.removeItem(at: directory) }
+            discard(prepared)
             throw CropClipboardError.pasteboardWriteFailed
         }
         if let directory = prepared.stagingDirectory {
-            removeOldStagingFolders(in: directory.deletingLastPathComponent(), keeping: directory)
+            DispatchQueue.global(qos: .utility).async {
+                removeOldStagingFolders(in: directory.deletingLastPathComponent(), keeping: directory)
+            }
         }
         return prepared.urls
+    }
+
+    static func discard(_ prepared: PreparedFiles) {
+        if let directory = prepared.stagingDirectory {
+            try? FileManager.default.removeItem(at: directory)
+        }
     }
 
     private static func removeOldStagingFolders(in root: URL, keeping current: URL) {
