@@ -3,6 +3,11 @@ import SwiftUI
 import ImageIO
 import UniformTypeIdentifiers
 
+private struct RenderedWatermarkPreview: @unchecked Sendable {
+    // The bitmap is only read after its detached rendering task has completed.
+    let bitmap: NSBitmapImageRep
+}
+
 struct WatermarkPresetEditorView: View {
     let photo: PhotoEntry?
     let sourcePath: String?
@@ -11,6 +16,7 @@ struct WatermarkPresetEditorView: View {
     @State private var draft: WatermarkConfiguration
     @State private var preview: NSImage?
     @State private var previewError: String?
+    @State private var previewPreparation: Task<WatermarkCustomRenderer.PreparedSource, Error>?
     @State private var saveError: String?
 
     init(configuration: WatermarkConfiguration, photo: PhotoEntry?, sourcePath: String?,
@@ -56,8 +62,6 @@ struct WatermarkPresetEditorView: View {
     private var previewPane: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("实时预览").font(.headline)
-            Text("拖动控件或修改文字后自动更新")
-                .font(.caption).foregroundStyle(.secondary)
             Group {
                 if let preview {
                     Image(nsImage: preview).resizable().scaledToFit()
@@ -202,6 +206,32 @@ struct WatermarkPresetEditorView: View {
                     .monospacedDigit().frame(width: 48)
             }
             if component.wrappedValue.kind != .logo {
+                Picker("字体", selection: component.fontID) {
+                    Text("原样（系统字体）").tag(String?.none)
+                    Section("常用字体") {
+                        ForEach(Array(WatermarkFont.bundled.prefix(5))) { option in
+                            Text(option.name).tag(Optional(option.id))
+                        }
+                    }
+                    Section("艺术字体") {
+                        ForEach(Array(WatermarkFont.bundled.dropFirst(5))) { option in
+                            Text(option.name).tag(Optional(option.id))
+                        }
+                    }
+                    Section("本机字体") {
+                        ForEach(WatermarkFont.local) { option in
+                            Text(option.name + (WatermarkFont.isAvailable(option) ? "" : "（未安装）"))
+                                .tag(Optional(option.id))
+                                .disabled(!WatermarkFont.isAvailable(option))
+                        }
+                    }
+                }
+                if let id = component.wrappedValue.fontID,
+                   let option = (WatermarkFont.bundled + WatermarkFont.local).first(where: { $0.id == id }) {
+                    Text("SwiftCull  光影留痕")
+                        .font(.custom(option.family, size: 18))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
                 HStack {
                     ColorPicker("文字颜色", selection: Binding(
                         get: { Color(nsColor: NSColor.watermarkHex(component.wrappedValue.colorHex) ?? .black) },
@@ -276,21 +306,38 @@ struct WatermarkPresetEditorView: View {
     }
 
     private func loadPreview() async {
-        preview = nil
         previewError = nil
-        try? await Task.sleep(nanoseconds: 180_000_000)
+        try? await Task.sleep(nanoseconds: 35_000_000)
         guard !Task.isCancelled else { return }
         guard let photo else {
             previewError = "筛选结果中没有可处理的照片"
             return
         }
+        if previewPreparation == nil {
+            previewPreparation = Task.detached(priority: .userInitiated) {
+                try WatermarkCustomRenderer.prepare(photo: photo, sourcePath: sourcePath,
+                                                    maxPixelSize: 1200)
+            }
+        }
         let current = draft
         do {
-            let data = try await Task.detached(priority: .userInitiated) {
-                try WatermarkService.previewData(photo: photo, configuration: current, sourcePath: sourcePath)
-            }.value
+            let prepared = try await previewPreparation!.value
             guard !Task.isCancelled else { return }
-            preview = NSImage(data: data)
+            let renderTask = Task.detached(priority: .userInitiated) {
+                try Task.checkCancellation()
+                return try RenderedWatermarkPreview(bitmap: WatermarkCustomRenderer.render(
+                    prepared: prepared, configuration: current))
+            }
+            let rendered = try await withTaskCancellationHandler {
+                try await renderTask.value
+            } onCancel: {
+                renderTask.cancel()
+            }
+            guard !Task.isCancelled else { return }
+            let bitmap = rendered.bitmap
+            let image = NSImage(size: NSSize(width: bitmap.pixelsWide, height: bitmap.pixelsHigh))
+            image.addRepresentation(bitmap)
+            preview = image
         } catch {
             guard !Task.isCancelled else { return }
             previewError = error.localizedDescription

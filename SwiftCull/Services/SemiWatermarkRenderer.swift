@@ -5,9 +5,13 @@ import ImageIO
 /// Native implementation of the bundled semi-utils layouts. Dimensions and placements follow
 /// the corresponding templates in semi-utils/config/templates (Apache-2.0).
 enum SemiWatermarkRenderer {
-    static func render(photo: PhotoEntry, preset: WatermarkPreset, sourcePath: String?,
-                       matchOrientation: Bool, maxPixelSize: Int?,
-                       configuration: WatermarkConfiguration? = nil) throws -> NSBitmapImageRep {
+    struct PreparedSource {
+        let image: CGImage
+        let metadata: Metadata
+    }
+
+    static func prepare(photo: PhotoEntry, sourcePath: String?,
+                        maxPixelSize: Int?) throws -> PreparedSource {
         guard let path = sourcePath ?? photo.watermarkSourcePath(preferRaw: false),
               let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil) else {
             throw WatermarkError.unreadableImage
@@ -15,6 +19,22 @@ enum SemiWatermarkRenderer {
         let image = try CropImageService.image(path: path, crop: photo.cropRect,
                                                maxPixelSize: maxPixelSize)
         let metadata = Metadata(path: path, source: source, fallbackDate: photo.fileDate)
+        return PreparedSource(image: image, metadata: metadata)
+    }
+
+    static func render(photo: PhotoEntry, preset: WatermarkPreset, sourcePath: String?,
+                       matchOrientation: Bool, maxPixelSize: Int?,
+                       configuration: WatermarkConfiguration? = nil) throws -> NSBitmapImageRep {
+        let prepared = try prepare(photo: photo, sourcePath: sourcePath, maxPixelSize: maxPixelSize)
+        return try render(prepared: prepared, preset: preset, matchOrientation: matchOrientation,
+                          configuration: configuration)
+    }
+
+    static func render(prepared: PreparedSource, preset: WatermarkPreset,
+                       matchOrientation: Bool,
+                       configuration: WatermarkConfiguration? = nil) throws -> NSBitmapImageRep {
+        let image = prepared.image
+        let metadata = prepared.metadata
         let selected = preset.resolved(isPortrait: image.height > image.width,
                                        matchOrientation: matchOrientation)
         let effectiveConfiguration = configuration?.adapted(to: selected)
@@ -267,7 +287,8 @@ enum SemiWatermarkRenderer {
                     drawRichCamera(before: String(metadata.camera[..<range.lowerBound]),
                                    after: String(metadata.camera[range.upperBound...]), x: textCenter,
                                    bottom: cameraBottom, height: cameraHeight * 1.5
-                                       * CGFloat(component.fontPercent / 4), maxWidth: canvas.width * 0.85)
+                                       * CGFloat(component.fontPercent / 4), maxWidth: canvas.width * 0.85,
+                                   fontID: component.fontID)
                 } else {
                     drawSlot(.blurCamera, defaultText: metadata.camera, defaultPosition: .bottomCenter,
                              baselinePercent: 4, image: image, canvas: canvas, metadata: metadata,
@@ -420,7 +441,7 @@ enum SemiWatermarkRenderer {
         let chosenWeight: NSFont.Weight = component.bold ? .bold : (weight == .bold ? .regular : weight)
         if component.position == defaultPosition {
             draw(text, x: x, bottom: bottom, height: scaledHeight, color: chosenColor,
-                 weight: chosenWeight, alignment: alignment, maxWidth: maxWidth)
+                 weight: chosenWeight, alignment: alignment, maxWidth: maxWidth, fontID: component.fontID)
         } else {
             drawAtPosition(text, component: component, image: image, canvas: canvas,
                            photoRect: photoRect ?? CGRect(x: 0, y: max(0, canvas.height - CGFloat(image.height)),
@@ -452,7 +473,8 @@ enum SemiWatermarkRenderer {
             }
         } else {
             draw(text, x: x, bottom: bottom, height: height, color: color,
-                 weight: weight, alignment: alignment, maxWidth: photoRect.width * 0.85)
+                 weight: weight, alignment: alignment, maxWidth: photoRect.width * 0.85,
+                 fontID: component.fontID)
         }
     }
 
@@ -476,8 +498,8 @@ enum SemiWatermarkRenderer {
         }
     }
 
-    private static func font(size: CGFloat, weight: NSFont.Weight) -> NSFont {
-        NSFont.systemFont(ofSize: max(7, size), weight: weight)
+    private static func font(size: CGFloat, weight: NSFont.Weight, fontID: String? = nil) -> NSFont {
+        WatermarkFont.resolve(id: fontID, size: size, weight: weight)
     }
 
     private static func measure(_ text: String, font: NSFont) -> CGFloat {
@@ -486,12 +508,12 @@ enum SemiWatermarkRenderer {
 
     private static func draw(_ text: String, x: CGFloat, bottom: CGFloat,
                              height: CGFloat, color: NSColor, weight: NSFont.Weight,
-                             alignment: NSTextAlignment, maxWidth: CGFloat) {
+                             alignment: NSTextAlignment, maxWidth: CGFloat, fontID: String? = nil) {
         guard !text.isEmpty else { return }
-        let targetFont = font(size: height, weight: weight)
+        let targetFont = font(size: height, weight: weight, fontID: fontID)
         let measured = measure(text, font: targetFont)
         let adjustedFont = measured > maxWidth
-            ? font(size: height * maxWidth / measured, weight: weight)
+            ? font(size: height * maxWidth / measured, weight: weight, fontID: fontID)
             : targetFont
         let attributes: [NSAttributedString.Key: Any] = [.font: adjustedFont, .foregroundColor: color]
         let textSize = (text as NSString).size(withAttributes: attributes)
@@ -505,11 +527,13 @@ enum SemiWatermarkRenderer {
     }
 
     private static func drawRichCamera(before: String, after: String, x: CGFloat,
-                                       bottom: CGFloat, height: CGFloat, maxWidth: CGFloat) {
+                                       bottom: CGFloat, height: CGFloat, maxWidth: CGFloat,
+                                       fontID: String? = nil) {
         let fragments = [(before, NSColor.white), ("Z", NSColor.systemRed), (after, NSColor.white)]
-        let targetFont = font(size: height, weight: .bold)
+        let targetFont = font(size: height, weight: .bold, fontID: fontID)
         let fullWidth = fragments.reduce(CGFloat.zero) { $0 + measure($1.0, font: targetFont) }
-        let fittedFont = fullWidth > maxWidth ? font(size: height * maxWidth / fullWidth, weight: .bold) : targetFont
+        let fittedFont = fullWidth > maxWidth
+            ? font(size: height * maxWidth / fullWidth, weight: .bold, fontID: fontID) : targetFont
         let spacing = height * 0.05
         let width = fragments.reduce(CGFloat.zero) { $0 + measure($1.0, font: fittedFont) } + spacing * 2
         var currentX = x - width / 2
@@ -538,7 +562,7 @@ enum SemiWatermarkRenderer {
             .flatMap(NSImage.init(contentsOf:))
     }
 
-    private struct Metadata {
+    struct Metadata {
         let make: String
         let camera: String
         let lens: String

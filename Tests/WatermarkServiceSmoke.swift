@@ -10,6 +10,10 @@ struct WatermarkServiceSmoke {
         precondition(WatermarkPreset.standard.resolved(isPortrait: true, matchOrientation: true) == .standardPortrait)
         precondition(WatermarkPreset.standardPortrait.resolved(isPortrait: false, matchOrientation: true) == .standard)
         precondition(WatermarkPreset.nikonPortrait.resolved(isPortrait: false, matchOrientation: true) == .nikonPortrait)
+        precondition(WatermarkFont.bundled.count == 18)
+        precondition(WatermarkFont.local.count == 5)
+        precondition(WatermarkFont.bundled.allSatisfy(WatermarkFont.isAvailable),
+                     "A bundled watermark font could not be loaded")
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -187,13 +191,49 @@ struct WatermarkServiceSmoke {
             custom.name = "测试布局"
             custom.background = .blurred
             custom.components.append(WatermarkComponent(kind: .customText, position: .topCenter,
-                                                         text: "SwiftCull", colorHex: "#FFFFFF", bold: true))
+                                                         text: "SwiftCull 光影留痕", colorHex: "#FFFFFF", bold: true))
             let customImage = try WatermarkCustomRenderer.render(photo: photo, configuration: custom)
             let customPreview = try WatermarkService.previewData(photo: photo, configuration: custom)
+            let preparedPreview = try WatermarkCustomRenderer.prepare(photo: photo, maxPixelSize: 1200)
+            let cachedTemplate = try WatermarkCustomRenderer.render(prepared: preparedPreview,
+                                                                    configuration: custom)
+            let uncachedTemplate = try WatermarkCustomRenderer.render(photo: photo, configuration: custom,
+                                                                      maxPixelSize: 1200)
+            precondition(cachedTemplate.tiffRepresentation == uncachedTemplate.tiffRepresentation,
+                         "Cached template preview differs from the original renderer")
             precondition(customImage.pixelsWide == width && customImage.pixelsHigh > height)
             precondition(!customPreview.isEmpty)
+            custom.components[custom.components.count - 1].fontID = "lxgw-wenkai"
+            let styledPreview = try WatermarkService.previewData(photo: photo, configuration: custom)
+            let cachedFont = try WatermarkCustomRenderer.render(prepared: preparedPreview,
+                                                                configuration: custom)
+            let uncachedFont = try WatermarkCustomRenderer.render(photo: photo, configuration: custom,
+                                                                  maxPixelSize: 1200)
+            precondition(cachedFont.tiffRepresentation == uncachedFont.tiffRepresentation,
+                         "Cached font preview differs from the original renderer")
+            var freeform = custom
+            freeform.templateLayout = false
+            let cachedFreeform = try WatermarkCustomRenderer.render(prepared: preparedPreview,
+                                                                    configuration: freeform)
+            let uncachedFreeform = try WatermarkCustomRenderer.render(photo: photo,
+                                                                      configuration: freeform,
+                                                                      maxPixelSize: 1200)
+            precondition(cachedFreeform.tiffRepresentation == uncachedFreeform.tiffRepresentation,
+                         "Cached freeform preview differs from the original renderer")
+            precondition(styledPreview != customPreview, "Changing the font did not update the preview")
+            let styledRoundtrip = try JSONDecoder().decode(WatermarkConfiguration.self,
+                                                          from: JSONEncoder().encode(custom))
+            precondition(styledRoundtrip.components.last?.fontID == "lxgw-wenkai")
+            let savedStyledExport = try WatermarkService.jpegData(photo: photo, configuration: styledRoundtrip)
+            let currentStyledExport = try WatermarkService.jpegData(photo: photo, configuration: custom)
+            precondition(savedStyledExport == currentStyledExport,
+                         "Saved font rendered differently on export")
+            var templateFont = WatermarkConfiguration.draft(from: .standard)
+            templateFont.components[0].fontID = "merriweather"
+            precondition(templateFont.adapted(to: .standardPortrait).components[0].fontID == "merriweather",
+                         "Orientation matching lost the selected font")
             if width > height, let previewPath = ProcessInfo.processInfo.environment["SWIFTCULL_SMOKE_PREVIEW"] {
-                try customPreview.write(to: URL(fileURLWithPath: previewPath))
+                try styledPreview.write(to: URL(fileURLWithPath: previewPath))
             }
             let customExport = try WatermarkService.export(photo: photo, configuration: custom,
                                                             sourcePath: input.path, to: outputDirectory)
