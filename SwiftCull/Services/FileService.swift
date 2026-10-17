@@ -4,7 +4,19 @@ import ImageIO
 final class FileService: @unchecked Sendable {
     static let shared = FileService()
 
-    private init() {}
+    struct TrashResult: Sendable {
+        let removedPaths: Set<String>
+        let failures: [String]
+        var succeeded: Bool { failures.isEmpty && !removedPaths.isEmpty }
+    }
+
+    private let trashItem: @Sendable (URL) throws -> Void
+
+    init(trashItem: @escaping @Sendable (URL) throws -> Void = {
+        try FileManager.default.trashItem(at: $0, resultingItemURL: nil)
+    }) {
+        self.trashItem = trashItem
+    }
 
     /// 快速扫描：仅列出文件并按文件名分组，使用文件系统日期，立即可用于展示。
     /// EXIF 拍摄日期由 captureDate(for:) 在后台补充。
@@ -115,38 +127,19 @@ final class FileService: @unchecked Sendable {
         return entries
     }
 
-    func movePhotoToTrash(_ photo: PhotoEntry) -> Bool {
-        let fileManager = FileManager.default
-        var success = true
-
-        if let jpgPath = photo.jpgPath {
+    func movePhotoToTrash(_ photo: PhotoEntry) -> TrashResult {
+        var removed: Set<String> = []
+        var failures: [String] = []
+        for path in photo.associatedFilePaths {
             do {
-                try fileManager.trashItem(at: URL(fileURLWithPath: jpgPath), resultingItemURL: nil)
+                try trashItem(URL(fileURLWithPath: path))
+                removed.insert(path)
             } catch {
-                print("Failed to trash JPG: \(error)")
-                success = false
+                failures.append("\((path as NSString).lastPathComponent)：\(error.localizedDescription)")
             }
         }
-
-        if let nefPath = photo.nefPath {
-            do {
-                try fileManager.trashItem(at: URL(fileURLWithPath: nefPath), resultingItemURL: nil)
-            } catch {
-                print("Failed to trash NEF: \(error)")
-                success = false
-            }
-        }
-
-        if let movPath = photo.movPath {
-            do {
-                try fileManager.trashItem(at: URL(fileURLWithPath: movPath), resultingItemURL: nil)
-            } catch {
-                print("Failed to trash MOV: \(error)")
-                success = false
-            }
-        }
-
-        return success
+        if photo.associatedFilePaths.isEmpty { failures.append("没有可删除的源文件") }
+        return TrashResult(removedPaths: removed, failures: failures)
     }
 
     func fileExists(at path: String) -> Bool {

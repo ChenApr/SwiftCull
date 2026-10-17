@@ -41,6 +41,25 @@ struct PhotoEntry: Identifiable, Hashable, Sendable {
     }
 
     var hasJpg: Bool { jpgPath != nil }
+    var associatedFilePaths: [String] {
+        Array(Set([jpgPath, nefPath, movPath].compactMap { $0 })).sorted()
+    }
+
+    /// A pair can be only partly trashed. Keep surviving paths usable for retry.
+    func removingFiles(at paths: Set<String>) -> PhotoEntry {
+        func keep(_ path: String?) -> String? { path.flatMap { paths.contains($0) ? nil : $0 } }
+        var updated = PhotoEntry(baseName: baseName, jpgPath: keep(jpgPath),
+                                 nefPath: keep(nefPath), movPath: keep(movPath),
+                                 jpgFileSize: keep(jpgPath) == nil ? nil : jpgFileSize,
+                                 nefFileSize: keep(nefPath) == nil ? nil : nefFileSize,
+                                 movFileSize: keep(movPath) == nil ? nil : movFileSize,
+                                 fileDate: fileDate, modificationDate: modificationDate)
+            .asVersion(CropVersion(id: versionID, name: versionName, crop: cropRect, aspect: cropAspect))
+        updated.rating = rating
+        updated.tags = tags
+        updated.isDeleted = isDeleted
+        return updated
+    }
     var hasNef: Bool { nefPath != nil }
     var hasMov: Bool { movPath != nil }
     var isVideoOnly: Bool { hasMov && !hasJpg && !hasNef }

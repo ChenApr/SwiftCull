@@ -37,6 +37,7 @@ class PhotoStore: ObservableObject {
     @Published var sourcePath: String = ""
     @Published var errorMessage: String?
     @Published var showingDeleteConfirmation = false
+    @Published private(set) var isDeleting = false
     @Published var photosToDelete: [PhotoEntry] = []
     @Published var isExporting = false
     @Published var exportProgress: Double = 0
@@ -59,16 +60,17 @@ class PhotoStore: ObservableObject {
     @Published var expandedVersionSources: Set<String> = []
     private var cropVersions: [String: [CropVersion]] = [:]
 
-    private let fileService = FileService.shared
+    private let fileService: FileService
     private let tagService = TagService.shared
-    private let ratingService = RatingService.shared
+    private let ratingService: RatingService
     private let thumbnailService = ThumbnailService.shared
     let finderTagService = FinderTagService.shared
-    private let projectMetadata = ProjectMetadataService.shared
+    private let projectMetadata: ProjectMetadataService
     private let tagWriteQueue = DispatchQueue(label: "com.swiftcull.tag-writes", qos: .utility)
     private var sidecarEntries: [String: PhotoMetadata] = [:]
     private var latestCopyID = UUID()
     private var enrichmentTask: Task<Void, Never>?
+    private var tagWriteIDs: [String: UUID] = [:]
 
     /// 选择模式下被编辑过的照片在编辑前的原始状态（用于「取消」纯内存回滚，零磁盘 IO）
     private struct OriginalPhotoState {
@@ -87,7 +89,12 @@ class PhotoStore: ObservableObject {
         finderTagService.tagColorLookup
     }
 
-    init() {}
+    init(fileService: FileService = .shared, ratingService: RatingService = .shared,
+         projectMetadata: ProjectMetadataService = .shared) {
+        self.fileService = fileService
+        self.ratingService = ratingService
+        self.projectMetadata = projectMetadata
+    }
 
     /// Wait for queued Finder-tag writes before scanning metadata again. This
     /// preserves the old read-after-write behavior without blocking the main
@@ -100,10 +107,14 @@ class PhotoStore: ObservableObject {
         }
     }
 
-    /// Drain the utility queue before the process exits so a recent Finder-tag
-    /// change cannot be lost solely because it was moved off the main actor.
-    func flushPendingTagWrites() {
+    /// Drain background tags and delayed sidecars before the process exits.
+    func flushPendingWrites() {
         tagWriteQueue.sync {}
+        let failures = projectMetadata.flush()
+        if !failures.isEmpty {
+            exportMessage = "评分保存失败：\(failures.joined(separator: "\n"))"
+            print("[ProjectMetadata] \(exportMessage!)")
+        }
     }
 
     private func buildPhotoIndexMap() -> [String: Int] {
@@ -381,9 +392,11 @@ class PhotoStore: ObservableObject {
 
     func loadPhotos() async {
         let loadID = UUID()
+        let folderPath = sourcePath
         enrichmentTask?.cancel()
         enrichmentTask = nil
         currentLoadID = loadID
+        tagWriteIDs.removeAll()
         lastPreheatKey = nil
         thumbnailService.cancelPending()
         thumbnailService.clearInMemoryCache()
@@ -406,8 +419,14 @@ class PhotoStore: ObservableObject {
         enrichStatus = ""
 
         await waitForTagWrites()
+        let metadataService = projectMetadata
+        let saveFailures = await Task.detached(priority: .utility) { metadataService.flush() }.value
+        guard currentLoadID == loadID else { return }
+        if !saveFailures.isEmpty {
+            exportMessage = "评分保存失败，数据仍待重试：\(saveFailures.joined(separator: "\n"))"
+        }
 
-        if sourcePath.isEmpty {
+        if folderPath.isEmpty {
             photos = []
             filteredPhotos = []
             cachedTotalSize = ByteCountFormatter.string(fromByteCount: 0, countStyle: .file)
@@ -419,8 +438,8 @@ class PhotoStore: ObservableObject {
         }
 
         var isDir: ObjCBool = false
-        if !FileManager.default.fileExists(atPath: sourcePath, isDirectory: &isDir) || !isDir.boolValue {
-            errorMessage = "路径不存在或不是文件夹: \(sourcePath)"
+        if !FileManager.default.fileExists(atPath: folderPath, isDirectory: &isDir) || !isDir.boolValue {
+            errorMessage = "路径不存在或不是文件夹: \(folderPath)"
             isLoading = false
             loadingProgress = 0
             loadingStatus = ""
@@ -431,12 +450,10 @@ class PhotoStore: ObservableObject {
         loadingProgress = 0.4
 
         // 第一阶段：快速列出文件（文件系统日期），立即展示网格
-        let folderPath = sourcePath
         let fast = await fileService.scanFilesFast(at: folderPath)
-        guard currentLoadID == loadID else { isLoading = false; return }
+        guard currentLoadID == loadID else { return }
 
         // Both metadata files may live on a slow card. Read them off the main actor.
-        let metadataService = projectMetadata
         let metadataTask = Task.detached(priority: .utility) {
             metadataService.load(from: folderPath)
         }
@@ -454,9 +471,11 @@ class PhotoStore: ObservableObject {
             return [source.asVersion(main)] + versions.filter { $0.id != nil }.map(source.asVersion)
         }
         for i in initial.indices {
-            initial[i].rating = ratingService.getRating(for: initial[i].sourceID)
-            if let meta = sidecarEntries[initial[i].sourceID], let r = meta.rating, r > 0 {
-                initial[i].rating = r
+            if let rating = sidecarEntries[initial[i].sourceID]?.rating {
+                initial[i].rating = min(5, max(0, rating))
+                ratingService.setRating(initial[i].rating, for: initial[i].sourceID, folderPath: folderPath)
+            } else {
+                initial[i].rating = ratingService.getRating(for: initial[i].sourceID, folderPath: folderPath)
             }
         }
 
@@ -704,7 +723,7 @@ class PhotoStore: ObservableObject {
     }
 
     func setRating(_ rating: Int, for photo: PhotoEntry) {
-        ratingService.setRating(rating, for: photo.sourceID)
+        ratingService.setRating(rating, for: photo.sourceID, folderPath: sourcePath)
         for index in photos.indices where photos[index].sourceID == photo.sourceID { photos[index].rating = rating }
         for index in filteredPhotos.indices where filteredPhotos[index].sourceID == photo.sourceID { filteredPhotos[index].rating = rating }
         if selectedPhoto?.sourceID == photo.sourceID { selectedPhoto?.rating = rating }
@@ -719,8 +738,21 @@ class PhotoStore: ObservableObject {
 
     private func scheduleTagWrite(_ tags: [String], for photo: PhotoEntry) {
         let colorLookup = tagColorLookup
+        let loadID = currentLoadID
+        let writeID = UUID()
+        tagWriteIDs[photo.sourceID] = writeID
         tagWriteQueue.async {
-            _ = TagService.shared.setTagsForPhotoPair(tags, photo: photo, colorLookup: colorLookup)
+            let service = TagService.shared
+            let result = service.writeTagsForPhotoPair(tags, photo: photo, colorLookup: colorLookup)
+            guard !result.succeeded else { return }
+            let actualTags = service.getTagsForPhotoPair(photo)
+            Task { @MainActor [weak self] in
+                guard let self, self.currentLoadID == loadID,
+                      self.tagWriteIDs[photo.sourceID] == writeID else { return }
+                self.setSharedTags(actualTags, sourceID: photo.sourceID)
+                let names = result.failedPaths.map { ($0 as NSString).lastPathComponent }.joined(separator: "、")
+                self.exportMessage = "Finder 标签写入失败：\(names.isEmpty ? photo.displayName : names)。已重新读取实际标签。"
+            }
         }
     }
 
@@ -964,18 +996,13 @@ class PhotoStore: ObservableObject {
 
         guard !pending.isEmpty else { return }
 
-        // 评分落盘（UserDefaults，很快）；标签写扩展属性（较慢）放后台
-        let colorLookup = tagColorLookup
-        tagWriteQueue.async {
-            let ratingService = RatingService.shared
-            let tagService = TagService.shared
-            for write in pending {
-                if write.ratingChanged {
-                    ratingService.setRating(write.photo.rating, for: write.photo.sourceID)
-                }
-                if write.tagsChanged {
-                    _ = tagService.setTagsForPhotoPair(write.photo.tags, photo: write.photo, colorLookup: colorLookup)
-                }
+        // Keep folder identity captured by the current session. Tag writes remain serialized.
+        for write in pending {
+            if write.ratingChanged {
+                ratingService.setRating(write.photo.rating, for: write.photo.sourceID, folderPath: sourcePath)
+            }
+            if write.tagsChanged {
+                scheduleTagWrite(write.photo.tags, for: write.photo)
             }
         }
 
@@ -1069,11 +1096,13 @@ class PhotoStore: ObservableObject {
     }
 
     func requestDelete(_ photo: PhotoEntry) {
+        guard !isDeleting else { return }
         photosToDelete = [photo]
         showingDeleteConfirmation = true
     }
 
     func requestDeleteSelected() {
+        guard !isDeleting else { return }
         let entries = selectedPhotoEntries.isEmpty ? selectedPhoto.map { [$0] } ?? [] : selectedPhotoEntries
         guard !entries.isEmpty else { return }
         photosToDelete = entries
@@ -1081,8 +1110,10 @@ class PhotoStore: ObservableObject {
     }
 
     func confirmDelete() {
+        guard !isDeleting else { return }
         let deleteRequest = photosToDelete
         let sourceIDs = Set(deleteRequest.map(\.sourceID))
+        guard !sourceIDs.isEmpty else { return }
         let requestedDeleteIds = Set(photos.filter { sourceIDs.contains($0.sourceID) }.map(\.id))
         let previousFilteredPhotos = filteredPhotos
         let selectionAnchorIndex = deletionSelectionAnchorIndex(
@@ -1090,39 +1121,45 @@ class PhotoStore: ObservableObject {
             in: previousFilteredPhotos
         )
 
-        // Build lookup dict for O(1) index access
-        var photoIndexByID: [String: Int] = [:]
-        for index in photos.indices {
-            photoIndexByID[photos[index].id] = index
-        }
-
-        // Mark as deleted immediately for instant UI update
-        var deletedIds: Set<String> = []
-        for id in requestedDeleteIds {
-            if let index = photoIndexByID[id] {
-                photos[index].isDeleted = true
-                deletedIds.insert(id)
-            }
-        }
-
         photosToDelete = []
         showingDeleteConfirmation = false
-
-        guard !deletedIds.isEmpty else { return }
-
-        applyFilters()
-        selectPhotoAfterDeletion(anchorIndex: selectionAnchorIndex)
-
-        // Perform actual file I/O on background thread
+        isDeleting = true
+        let loadID = currentLoadID
         let fileServiceRef = self.fileService
         let photosToTrash = sourceIDs.compactMap { source in
             deleteRequest.first { $0.sourceID == source }
         }
-        for source in sourceIDs { cropVersions.removeValue(forKey: source) }
-        try? CropCatalog.save(cropVersions, folder: sourcePath)
-        Task.detached(priority: .utility) {
-            for photo in photosToTrash {
-                _ = fileServiceRef.movePhotoToTrash(photo)
+        Task {
+            await waitForTagWrites()
+            let outcomes = await Task.detached(priority: .utility) {
+                photosToTrash.map { ($0.sourceID, fileServiceRef.movePhotoToTrash($0)) }
+            }.value
+            isDeleting = false
+            let failures = outcomes.flatMap { $0.1.failures }
+            if !failures.isEmpty {
+                exportMessage = "移至废纸篓未全部完成：\(failures.joined(separator: "\n"))。失败文件仍保留，裁剪记录未删除。"
+            }
+            // A folder switch or refresh can happen while disk operations are running.
+            guard currentLoadID == loadID else { return }
+            let results = Dictionary(uniqueKeysWithValues: outcomes)
+            for index in photos.indices {
+                guard let result = results[photos[index].sourceID] else { continue }
+                if result.succeeded {
+                    photos[index].isDeleted = true
+                } else if !result.removedPaths.isEmpty {
+                    photos[index] = photos[index].removingFiles(at: result.removedPaths)
+                }
+            }
+            // Retain the catalog even after success so restoring the source from Trash
+            // and refreshing also restores its nondestructive edits.
+            let previousSelection = selectedPhoto
+            applyFilters()
+            selectedPhotos.formIntersection(Set(filteredPhotos.map(\.id)))
+            if let previousSelection,
+               let surviving = filteredPhotos.first(where: { $0.id == previousSelection.id }) {
+                selectedPhoto = surviving
+            } else {
+                selectPhotoAfterDeletion(anchorIndex: selectionAnchorIndex)
             }
         }
     }

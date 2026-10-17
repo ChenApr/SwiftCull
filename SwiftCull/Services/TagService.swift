@@ -74,28 +74,27 @@ final class TagService: @unchecked Sendable {
         try? mutableUrl.setResourceValues(resourceValues)
     }
 
+    struct WriteResult: Sendable {
+        let failedPaths: [String]
+        let attemptedCount: Int
+        var succeeded: Bool { attemptedCount > 0 && failedPaths.isEmpty }
+    }
+
+    func writeTagsForPhotoPair(_ tags: [String], photo: PhotoEntry,
+                              colorLookup: [String: Int] = [:]) -> WriteResult {
+        let paths = photo.associatedFilePaths
+        let failed = paths.filter { !setTags(tags, for: $0, colorLookup: colorLookup) }
+        return WriteResult(failedPaths: failed, attemptedCount: paths.count)
+    }
+
     func setTagsForPhotoPair(_ tags: [String], photo: PhotoEntry, colorLookup: [String: Int] = [:]) -> Bool {
-        var success = true
-        if let jpgPath = photo.jpgPath {
-            if !setTags(tags, for: jpgPath, colorLookup: colorLookup) {
-                success = false
-            }
-        }
-        if let nefPath = photo.nefPath {
-            if !setTags(tags, for: nefPath, colorLookup: colorLookup) {
-                success = false
-            }
-        }
-        return success
+        writeTagsForPhotoPair(tags, photo: photo, colorLookup: colorLookup).succeeded
     }
 
     func getTagsForPhotoPair(_ photo: PhotoEntry) -> [String] {
         var allTags = Set<String>()
-        if let jpgPath = photo.jpgPath {
-            allTags.formUnion(getTags(for: jpgPath))
-        }
-        if let nefPath = photo.nefPath {
-            allTags.formUnion(getTags(for: nefPath))
+        for path in photo.associatedFilePaths {
+            allTags.formUnion(getTags(for: path))
         }
         return Array(allTags).sorted()
     }

@@ -39,13 +39,13 @@ struct ContentView: View {
             if store.photosToDelete.count == 1 {
                 let hasVersions = store.photosToDelete.first.map { store.versionCount(for: $0) > 1 } ?? false
                 Text(hasVersions
-                     ? "将此照片的所有格式文件移至废纸篓，并移除它的裁剪版本？原文件可通过废纸篓恢复。"
+                     ? "将此照片的所有格式文件移至废纸篓？裁剪记录将保留，恢复原文件并刷新后可继续编辑。"
                      : "将此照片（所有格式文件）移至废纸篓？此操作可通过废纸篓恢复。")
             } else {
                 Text("将 \(store.photosToDelete.count) 张照片（所有格式文件）移至废纸篓？此操作可通过废纸篓恢复。")
             }
         }
-        .alert("导出结果", isPresented: Binding(
+        .alert("操作结果", isPresented: Binding(
             get: { store.exportMessage != nil },
             set: { if !$0 { store.exportMessage = nil } }
         )) {
@@ -78,7 +78,7 @@ struct ContentView: View {
             await store.loadPhotos()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
-            store.flushPendingTagWrites()
+            store.flushPendingWrites()
         }
         .onChange(of: store.selectedPhoto?.id) { _, newId in
             if newId == nil {
