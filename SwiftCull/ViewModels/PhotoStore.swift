@@ -53,6 +53,8 @@ class PhotoStore: ObservableObject {
     @Published var isSelectMode = false
     @Published var detectedVolumes: [DetectedVolume] = []
     @Published var cropEditorPhoto: PhotoEntry?
+    @Published var livePhotoEditorPhoto: PhotoEntry?
+    @Published var livePhotoInitialTime: Double = 0
     @Published var expandedVersionSources: Set<String> = []
     private var cropVersions: [String: [CropVersion]] = [:]
 
@@ -131,7 +133,7 @@ class PhotoStore: ObservableObject {
 
     var canEditSelectedCrop: Bool {
         selectedPhotos.count == 1 && selectedPhoto.map {
-            selectedPhotos.contains($0.id) && !$0.isVideoOnly
+            selectedPhotos.contains($0.id) && !$0.hasMov
         } == true
     }
 
@@ -157,8 +159,16 @@ class PhotoStore: ObservableObject {
     }
 
     func editCrop(_ photo: PhotoEntry) {
-        guard !photo.isVideoOnly else { return }
+        guard !photo.hasMov else { return }
         cropEditorPhoto = photo
+    }
+
+    func openLivePhotoEditor(for photo: PhotoEntry) {
+        guard photo.movPath != nil else { return }
+        livePhotoInitialTime = isVideoPlaybackMode && selectedPhoto?.id == photo.id
+            ? videoPlaybackController.currentTime : 0
+        videoPlaybackController.player?.pause()
+        livePhotoEditorPhoto = photo
     }
 
     @discardableResult
@@ -197,7 +207,7 @@ class PhotoStore: ObservableObject {
     @discardableResult
     func saveCrop(_ crop: CropRect?, aspect: CropAspectRatio, for photo: PhotoEntry,
                   createCopy: Bool, name: String) -> Bool {
-        guard !sourcePath.isEmpty else { return false }
+        guard !sourcePath.isEmpty, !photo.hasMov else { return false }
         guard let source = photos.first(where: { $0.sourceID == photo.sourceID && $0.versionID == nil }) else { return false }
         let cleanCrop = crop?.normalized.isFull == true ? nil : crop?.normalized
         var versions = cropVersions[photo.sourceID] ?? [CropVersion(id: nil, name: nil, crop: nil)]

@@ -4,6 +4,7 @@ import SwiftUI
 struct VideoPlaybackView: View {
     @ObservedObject var controller: VideoPlaybackController
     let displayName: String
+    let onLivePhoto: () -> Void
     let onExit: () -> Void
 
     var body: some View {
@@ -35,6 +36,10 @@ struct VideoPlaybackView: View {
                     .truncationMode(.middle)
 
                 Spacer(minLength: 8)
+
+                Button(action: onLivePhoto) {
+                    Label("制作实况照片…", systemImage: "livephoto")
+                }
 
                 Button(action: onExit) {
                     Label("退出播放模式", systemImage: "xmark")

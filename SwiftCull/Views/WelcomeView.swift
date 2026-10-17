@@ -95,6 +95,7 @@ struct ShortcutGuideView: View {
         ("拖拽框选", "鼠标框选多张照片"),
         ("Space", "普通浏览：Quick Look 预览；播放模式：播放 / 暂停"),
         ("V", "进入 / 退出当前照片的视频播放模式"),
+        ("P", "实况照片编辑器：预览 / 停止当前选取片段"),
         ("← →", "播放模式：前后跳转 5 秒；Shift + 左右逐帧"),
         ("↑ ↓", "播放模式：调节音量"),
         ("E", "网格 / 大图切换"),
@@ -187,9 +188,10 @@ struct PhotoSinglePreviewView: View {
             background
 
             if store.isVideoPlaybackMode, photo.movPath != nil {
-                VideoPlaybackView(controller: store.videoPlaybackController, displayName: photo.displayName) {
-                    store.exitVideoPlaybackMode()
-                }
+                VideoPlaybackView(controller: store.videoPlaybackController,
+                                  displayName: photo.displayName,
+                                  onLivePhoto: { store.openLivePhotoEditor(for: photo) },
+                                  onExit: { store.exitVideoPlaybackMode() })
             } else {
                 GeometryReader { geo in
                     DetailThumbnailView(photo: photo, targetSize: 1800)
@@ -304,7 +306,7 @@ struct PhotoSinglePreviewView: View {
             }
             .disabled(scale >= maxScale)
 
-            if !photo.isVideoOnly {
+            if !photo.hasMov {
                 Divider().frame(height: 16)
                 Button { store.editCrop(photo) } label: {
                     Image(systemName: "crop.rotate")
