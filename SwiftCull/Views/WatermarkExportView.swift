@@ -419,7 +419,6 @@ struct WatermarkExportView: View {
     }
 
     private func editOverlay(_ overlay: WatermarkOverlayChoice) {
-        guard let currentItem else { return }
         let saved = configuration(for: overlay.choice)
         let preset: WatermarkPreset
         switch overlay.choice {
@@ -428,13 +427,9 @@ struct WatermarkExportView: View {
         }
         let matchOrientation = saved?.matchOrientation ?? overlay.matchOrientation
         let selected: WatermarkPreset
-        if matchOrientation,
-           let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: currentItem.sourcePath) as CFURL, nil),
-           let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
-               kCGImageSourceCreateThumbnailFromImageAlways: true,
-               kCGImageSourceCreateThumbnailWithTransform: true,
-               kCGImageSourceThumbnailMaxPixelSize: 128
-           ] as CFDictionary) {
+        if matchOrientation, let currentItem,
+           let image = try? CropImageService.image(path: currentItem.sourcePath,
+                                                   crop: currentItem.photo.cropRect, maxPixelSize: 128) {
             selected = preset.resolved(isPortrait: image.height > image.width, matchOrientation: true)
         } else {
             selected = preset

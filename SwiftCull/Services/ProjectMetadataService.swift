@@ -23,8 +23,6 @@ final class ProjectMetadataService: @unchecked Sendable {
     private let saveDelay: TimeInterval = 2.0
     private var pendingWork: DispatchWorkItem?
     private let queue = DispatchQueue(label: "com.swiftcull.project-metadata", qos: .utility)
-    private var cachedFolderPath: String?
-    private var cachedFileURL: URL?
 
     private init() {}
 
@@ -41,10 +39,7 @@ final class ProjectMetadataService: @unchecked Sendable {
     // MARK: - Load
 
     func load(from folderPath: String) -> [String: PhotoMetadata] {
-        cachedFolderPath = folderPath
-        cachedFileURL = sidecarFileURL(for: folderPath)
-
-        guard let url = cachedFileURL else { return [:] }
+        let url = sidecarFileURL(for: folderPath)
         guard FileManager.default.fileExists(atPath: url.path) else { return [:] }
 
         do {
@@ -60,9 +55,6 @@ final class ProjectMetadataService: @unchecked Sendable {
     // MARK: - Save (debounced)
 
     func scheduleSave(entries: [String: PhotoMetadata], folderPath: String) {
-        cachedFolderPath = folderPath
-        cachedFileURL = sidecarFileURL(for: folderPath)
-
         pendingWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             self?.saveNow(entries: entries, folderPath: folderPath)

@@ -41,6 +41,7 @@ class PhotoStore: ObservableObject {
     @Published var isExporting = false
     @Published var exportProgress: Double = 0
     @Published var exportMessage: String?
+    @Published var copyStatus: String?
     @Published var viewMode: PhotoViewMode = .grid {
         didSet {
             if viewMode != .single { exitVideoPlaybackMode() }
@@ -64,7 +65,10 @@ class PhotoStore: ObservableObject {
     private let thumbnailService = ThumbnailService.shared
     let finderTagService = FinderTagService.shared
     private let projectMetadata = ProjectMetadataService.shared
+    private let tagWriteQueue = DispatchQueue(label: "com.swiftcull.tag-writes", qos: .utility)
     private var sidecarEntries: [String: PhotoMetadata] = [:]
+    private var latestCopyID = UUID()
+    private var enrichmentTask: Task<Void, Never>?
 
     /// 选择模式下被编辑过的照片在编辑前的原始状态（用于「取消」纯内存回滚，零磁盘 IO）
     private struct OriginalPhotoState {
@@ -78,11 +82,29 @@ class PhotoStore: ObservableObject {
     private var lastPreheatKey: String?
     /// filteredPhotos 的 id→下标缓存，随 applyFilters 重建，供滚动预热/方向键导航 O(1) 定位。
     private var filteredIndexById: [String: Int] = [:]
+    private var cachedTotalSize = ByteCountFormatter.string(fromByteCount: 0, countStyle: .file)
     private var tagColorLookup: [String: Int] {
         finderTagService.tagColorLookup
     }
 
     init() {}
+
+    /// Wait for queued Finder-tag writes before scanning metadata again. This
+    /// preserves the old read-after-write behavior without blocking the main
+    /// actor while the extended-attribute writes are in progress.
+    private func waitForTagWrites() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            tagWriteQueue.async {
+                continuation.resume()
+            }
+        }
+    }
+
+    /// Drain the utility queue before the process exits so a recent Finder-tag
+    /// change cannot be lost solely because it was moved off the main actor.
+    func flushPendingTagWrites() {
+        tagWriteQueue.sync {}
+    }
 
     private func buildPhotoIndexMap() -> [String: Int] {
         var map: [String: Int] = [:]
@@ -105,9 +127,12 @@ class PhotoStore: ObservableObject {
     var photoCount: Int { filteredPhotos.count }
     var totalPhotoCount: Int { photos.count }
 
-    var totalSize: String {
-        let uniquePhotos = Dictionary(grouping: filteredPhotos, by: \.sourceID).values.compactMap(\.first)
-        let total = uniquePhotos.reduce(Int64(0)) { total, photo in
+    var totalSize: String { cachedTotalSize }
+
+    private func calculateTotalSize() -> String {
+        var seenSources: Set<String> = []
+        let total = filteredPhotos.reduce(Int64(0)) { total, photo in
+            guard seenSources.insert(photo.sourceID).inserted else { return total }
             switch filterOptions.fileTypeFilter {
             case .jpgOnly:
                 return total + (photo.jpgFileSize ?? 0)
@@ -286,13 +311,40 @@ class PhotoStore: ObservableObject {
     func copyOriginalFiles(clicked photo: PhotoEntry? = nil, useSelection: Bool = true) -> Bool {
         let targets = contextPhotos(clicked: photo, useSelection: useSelection)
         guard !targets.isEmpty else { return false }
-        do {
-            _ = try CropClipboardService.copy(targets)
-            return true
-        } catch {
-            exportMessage = "复制裁剪照片失败：\(error.localizedDescription)"
-            return false
+        let copyID = UUID()
+        latestCopyID = copyID
+        copyStatus = nil
+        guard targets.contains(where: { $0.cropRect != nil || $0.isVersionCopy }) else {
+            do {
+                _ = try CropClipboardService.copy(targets)
+                return true
+            } catch {
+                exportMessage = "复制照片失败：\(error.localizedDescription)"
+                return false
+            }
         }
+
+        copyStatus = "正在准备裁剪后的文件…"
+        Task { @MainActor in
+            do {
+                let prepared = try await Task.detached(priority: .userInitiated) {
+                    try CropClipboardService.prepare(targets)
+                }.value
+                guard latestCopyID == copyID else {
+                    CropClipboardService.discard(prepared)
+                    return
+                }
+                _ = try CropClipboardService.commit(prepared)
+                copyStatus = "已复制裁剪后的文件，可在 Finder 中粘贴"
+                try? await Task.sleep(for: .seconds(3))
+                if latestCopyID == copyID { copyStatus = nil }
+            } catch {
+                guard latestCopyID == copyID else { return }
+                copyStatus = nil
+                exportMessage = "复制裁剪照片失败：\(error.localizedDescription)"
+            }
+        }
+        return true
     }
 
     func contextSetRating(_ rating: Int, clicked photo: PhotoEntry, useSelection: Bool = true) {
@@ -329,6 +381,8 @@ class PhotoStore: ObservableObject {
 
     func loadPhotos() async {
         let loadID = UUID()
+        enrichmentTask?.cancel()
+        enrichmentTask = nil
         currentLoadID = loadID
         lastPreheatKey = nil
         thumbnailService.cancelPending()
@@ -351,9 +405,12 @@ class PhotoStore: ObservableObject {
         enrichProgress = 0
         enrichStatus = ""
 
+        await waitForTagWrites()
+
         if sourcePath.isEmpty {
             photos = []
             filteredPhotos = []
+            cachedTotalSize = ByteCountFormatter.string(fromByteCount: 0, countStyle: .file)
             filteredPhotosVersion &+= 1
             isLoading = false
             loadingProgress = 0
@@ -374,12 +431,23 @@ class PhotoStore: ObservableObject {
         loadingProgress = 0.4
 
         // 第一阶段：快速列出文件（文件系统日期），立即展示网格
-        let fast = await fileService.scanFilesFast(at: sourcePath)
+        let folderPath = sourcePath
+        let fast = await fileService.scanFilesFast(at: folderPath)
         guard currentLoadID == loadID else { isLoading = false; return }
 
-        // 立即读取评分（UserDefaults，很快）与 sidecar 星级，让网格第一时间可用
-        sidecarEntries = projectMetadata.load(from: sourcePath)
-        cropVersions = CropCatalog.load(folder: sourcePath)
+        // Both metadata files may live on a slow card. Read them off the main actor.
+        let metadataService = projectMetadata
+        let metadataTask = Task.detached(priority: .utility) {
+            metadataService.load(from: folderPath)
+        }
+        let cropTask = Task.detached(priority: .utility) {
+            CropCatalog.load(folder: folderPath)
+        }
+        let loadedMetadata = await metadataTask.value
+        let loadedCrops = await cropTask.value
+        guard currentLoadID == loadID else { return }
+        sidecarEntries = loadedMetadata
+        cropVersions = loadedCrops
         var initial = fast.flatMap { source -> [PhotoEntry] in
             let versions = cropVersions[source.sourceID] ?? [CropVersion(id: nil, name: nil, crop: nil)]
             let main = versions.first(where: { $0.id == nil }) ?? CropVersion(id: nil, name: nil, crop: nil)
@@ -401,13 +469,22 @@ class PhotoStore: ObservableObject {
         guard !fast.isEmpty else { return }
 
         // 第二阶段：后台补充 EXIF 拍摄日期与 Finder 标签，完成后按拍摄日期平滑重排
-        await enrichPhotos(loadID: loadID)
+        let task = Task { [weak self] in
+            guard let self else { return }
+            await self.enrichPhotos(loadID: loadID)
+        }
+        enrichmentTask = task
+        await task.value
+        if currentLoadID == loadID {
+            enrichmentTask = nil
+        }
     }
 
     /// 后台补充拍摄日期与标签，带细粒度进度；完成后按最终拍摄日期重排
     private func enrichPhotos(loadID: UUID) async {
         let snapshot = photos
-        let total = snapshot.count
+        let sourceEntries = Dictionary(grouping: snapshot, by: \.sourceID).compactMap { $0.value.first }
+        let total = sourceEntries.count
         guard total > 0 else { return }
 
         isEnriching = true
@@ -415,59 +492,68 @@ class PhotoStore: ObservableObject {
         enrichStatus = "正在读取拍摄信息…"
 
         struct EnrichResult: Sendable {
-            let id: String
+            let sourceID: String
             let captureDate: Date?
             let tags: [String]
         }
 
-        let chunkSize = 100
-        let chunkCount = (total + chunkSize - 1) / chunkSize
-        var chunkResults = Array<[EnrichResult]?>(repeating: nil, count: chunkCount)
+        // A card is much slower at many concurrent metadata reads than at a small
+        // bounded stream. Keep visible thumbnail work ahead of this utility queue.
+        let maxConcurrentReads = 2
+        var results: [EnrichResult] = []
+        results.reserveCapacity(total)
         var completedCount = 0
 
-        await withTaskGroup(of: (Int, [EnrichResult]).self) { group in
-            for chunkIndex in 0..<chunkCount {
-                let startIndex = chunkIndex * chunkSize
-                let endIndex = min(startIndex + chunkSize, total)
-                let chunk = Array(snapshot[startIndex..<endIndex])
-                group.addTask(priority: .userInitiated) {
+        await withTaskGroup(of: EnrichResult?.self) { group in
+            var nextIndex = 0
+
+            func addNextRead() {
+                guard nextIndex < sourceEntries.count else { return }
+                let photo = sourceEntries[nextIndex]
+                nextIndex += 1
+                group.addTask(priority: .utility) {
+                    guard !Task.isCancelled else { return nil }
                     let tagService = TagService.shared
-                    let partial = chunk.map { photo in
-                        EnrichResult(
-                            id: photo.id,
-                            captureDate: FileService.captureDate(for: photo),
-                            tags: tagService.getTagsForPhotoPair(photo)
-                        )
-                    }
-                    return (chunkIndex, partial)
+                    return EnrichResult(
+                        sourceID: photo.sourceID,
+                        captureDate: FileService.captureDate(for: photo),
+                        tags: tagService.getTagsForPhotoPair(photo)
+                    )
                 }
             }
 
-            for await (chunkIndex, partial) in group {
-                guard currentLoadID == loadID else { break }
-                chunkResults[chunkIndex] = partial
+            for _ in 0..<min(maxConcurrentReads, sourceEntries.count) {
+                addNextRead()
+            }
+
+            while let result = await group.next() {
+                guard !Task.isCancelled, currentLoadID == loadID else {
+                    group.cancelAll()
+                    break
+                }
+                if let result {
+                    results.append(result)
+                }
                 completedCount += 1
-                enrichProgress = Double(completedCount) / Double(chunkCount)
-                enrichStatus = "正在读取拍摄信息 \(min(completedCount * chunkSize, total))/\(total)"
+                enrichProgress = Double(completedCount) / Double(total)
+                enrichStatus = "正在读取拍摄信息 \(completedCount)/\(total)"
+                addNextRead()
             }
         }
 
-        guard currentLoadID == loadID else { isEnriching = false; return }
+        guard !Task.isCancelled, currentLoadID == loadID else { isEnriching = false; return }
 
         var dateMap: [String: Date] = [:]
         var tagMap: [String: [String]] = [:]
-        for chunk in chunkResults {
-            guard let chunk else { continue }
-            for r in chunk {
-                if let d = r.captureDate { dateMap[r.id] = d }
-                tagMap[r.id] = r.tags
-            }
+        for result in results {
+            if let date = result.captureDate { dateMap[result.sourceID] = date }
+            tagMap[result.sourceID] = result.tags
         }
 
         var rebuilt: [PhotoEntry] = []
         rebuilt.reserveCapacity(photos.count)
         for photo in photos {
-            let exifDate = dateMap[photo.id]
+            let exifDate = dateMap[photo.sourceID]
             let needsRebuild = exifDate != nil && exifDate != photo.fileDate
             var updated: PhotoEntry
             if needsRebuild {
@@ -491,7 +577,7 @@ class PhotoStore: ObservableObject {
                 updated = photo
             }
             // 标签：未处于用户编辑中的照片，采用磁盘读取的最新标签
-            if editedOriginals[photo.id] == nil, let tags = tagMap[photo.id] {
+            if editedOriginals[photo.id] == nil, let tags = tagMap[photo.sourceID] {
                 updated.tags = tags
             }
             rebuilt.append(updated)
@@ -538,7 +624,7 @@ class PhotoStore: ObservableObject {
         let upperBound = min(filteredPhotos.count, centerIndex + after + 1)
 
         let items = filteredPhotos[lowerBound..<upperBound].map { photo in
-            (id: "\(photo.primaryFilePath)|\(quantizedSize)", path: photo.primaryFilePath)
+            (path: photo.primaryFilePath, crop: photo.cropRect)
         }
         thumbnailService.preloadThumbnails(paths: items, size: CGFloat(quantizedSize))
     }
@@ -588,6 +674,7 @@ class PhotoStore: ObservableObject {
 
         filteredPhotos = sortPhotos(result)
         filteredIndexById = buildFilteredIndexMap()
+        cachedTotalSize = calculateTotalSize()
         filteredPhotosVersion &+= 1
     }
 
@@ -626,8 +713,15 @@ class PhotoStore: ObservableObject {
 
     func clearTags(for photo: PhotoEntry) {
         guard let index = photos.firstIndex(where: { $0.id == photo.id }) else { return }
-        _ = tagService.setTagsForPhotoPair([], photo: photos[index])
+        scheduleTagWrite([], for: photos[index])
         setSharedTags([], sourceID: photo.sourceID)
+    }
+
+    private func scheduleTagWrite(_ tags: [String], for photo: PhotoEntry) {
+        let colorLookup = tagColorLookup
+        tagWriteQueue.async {
+            _ = TagService.shared.setTagsForPhotoPair(tags, photo: photo, colorLookup: colorLookup)
+        }
     }
 
     private func setSharedTags(_ tags: [String], sourceID: String) {
@@ -793,7 +887,7 @@ class PhotoStore: ObservableObject {
         var currentTags = photos[index].tags
         if !currentTags.contains(tag) {
             currentTags.append(tag)
-            _ = tagService.setTagsForPhotoPair(currentTags, photo: photos[index], colorLookup: tagColorLookup)
+            scheduleTagWrite(currentTags, for: photos[index])
             setSharedTags(currentTags, sourceID: photo.sourceID)
         }
     }
@@ -802,7 +896,7 @@ class PhotoStore: ObservableObject {
         guard let index = photos.firstIndex(where: { $0.id == photo.id }) else { return }
         var currentTags = photos[index].tags
         currentTags.removeAll { $0 == tag }
-        _ = tagService.setTagsForPhotoPair(currentTags, photo: photos[index], colorLookup: tagColorLookup)
+        scheduleTagWrite(currentTags, for: photos[index])
         setSharedTags(currentTags, sourceID: photo.sourceID)
     }
 
@@ -872,7 +966,7 @@ class PhotoStore: ObservableObject {
 
         // 评分落盘（UserDefaults，很快）；标签写扩展属性（较慢）放后台
         let colorLookup = tagColorLookup
-        Task.detached(priority: .utility) {
+        tagWriteQueue.async {
             let ratingService = RatingService.shared
             let tagService = TagService.shared
             for write in pending {
