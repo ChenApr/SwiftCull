@@ -6,12 +6,14 @@ struct AsyncThumbnailView: View {
     let imagePath: String
     let size: CGFloat
     let isVideo: Bool
+    let crop: CropRect?
 
-    init(photoId: String, imagePath: String, size: CGFloat, isVideo: Bool = false) {
+    init(photoId: String, imagePath: String, size: CGFloat, isVideo: Bool = false, crop: CropRect? = nil) {
         self.photoId = photoId
         self.imagePath = imagePath
         self.size = size
         self.isVideo = isVideo
+        self.crop = crop
     }
 
     @State private var image: NSImage?
@@ -22,7 +24,7 @@ struct AsyncThumbnailView: View {
     }
 
     private var cacheId: String {
-        "\(imagePath)|\(ThumbnailService.quantizedSize(size))"
+        "\(imagePath)|\(ThumbnailService.quantizedSize(size))|\(String(describing: crop))"
     }
 
     var body: some View {
@@ -80,7 +82,7 @@ struct AsyncThumbnailView: View {
         loadTask?.cancel()
         let service = ThumbnailService.shared
 
-        if let cached = service.getCached(cacheId) {
+        if crop == nil, let cached = service.getCached(cacheId) {
             self.image = cached
             return
         }
@@ -90,8 +92,18 @@ struct AsyncThumbnailView: View {
         let requestCacheId = cacheId
         let requestPath = imagePath
         let requestSize = renderSize
+        let requestCrop = crop
         loadTask = Task { @MainActor in
-            let newImage = await service.thumbnail(path: requestPath, id: requestCacheId, size: requestSize)
+            let newImage: NSImage?
+            if let requestCrop {
+                let cgImage = await Task.detached(priority: .userInitiated) {
+                    try? CropImageService.image(path: requestPath, crop: requestCrop,
+                                                maxPixelSize: Int(requestSize * 3))
+                }.value
+                newImage = cgImage.map { NSImage(cgImage: $0, size: NSSize(width: $0.width, height: $0.height)) }
+            } else {
+                newImage = await service.thumbnail(path: requestPath, id: requestCacheId, size: requestSize)
+            }
             guard !Task.isCancelled else { return }
             guard cacheId == requestCacheId, let newImage else { return }
             self.image = newImage
@@ -105,7 +117,7 @@ struct DetailThumbnailView: View {
     @State private var image: NSImage?
 
     private var cacheId: String {
-        "detail|\(photo.primaryFilePath)|\(Int(targetSize.rounded()))"
+        "detail|\(photo.primaryFilePath)|\(Int(targetSize.rounded()))|\(String(describing: photo.cropRect))"
     }
 
     var body: some View {
@@ -132,8 +144,8 @@ struct DetailThumbnailView: View {
             }
         }
         .frame(maxWidth: .infinity)
-        .id(photo.primaryFilePath)
-        .task(id: photo.primaryFilePath) {
+        .id(cacheId)
+        .task(id: cacheId) {
             await loadDetailImage()
         }
     }
@@ -144,14 +156,16 @@ struct DetailThumbnailView: View {
 
         let requestPath = path
         let isVideo = photo.isVideoOnly
-        let loaded = await loadDetailImageBackground(path: requestPath, isVideo: isVideo)
+        let loaded = await loadDetailImageBackground(path: requestPath, isVideo: isVideo,
+                                                     crop: photo.cropRect, targetPixels: Int(targetSize * 2))
 
         guard !Task.isCancelled else { return }
         self.image = loaded
     }
 
     /// Background image loading; isolated to avoid NSImage Sendable issues on older SDKs.
-    private nonisolated func loadDetailImageBackground(path: String, isVideo: Bool) async -> NSImage? {
+    private nonisolated func loadDetailImageBackground(path: String, isVideo: Bool,
+                                                       crop: CropRect?, targetPixels: Int) async -> NSImage? {
         if isVideo {
             let service = ThumbnailService.shared
             // Use withCheckedContinuation to avoid NSImage Sendable requirement in task groups
@@ -160,6 +174,11 @@ struct DetailThumbnailView: View {
                     continuation.resume(returning: image)
                 }
             }
+        }
+        if let crop {
+            guard let cgImage = try? CropImageService.image(path: path, crop: crop,
+                                                            maxPixelSize: targetPixels) else { return nil }
+            return NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
         }
         let url = URL(fileURLWithPath: path)
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }

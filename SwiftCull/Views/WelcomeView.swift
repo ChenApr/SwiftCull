@@ -95,6 +95,7 @@ struct ShortcutGuideView: View {
         ("拖拽框选", "鼠标框选多张照片"),
         ("Space", "Quick Look 预览"),
         ("E", "网格 / 大图切换"),
+        ("C", "裁剪单张照片 / 编辑当前版本"),
         ("Q", "完成并退出多选"),
         ("双指捏合", "缩放网格缩略图"),
         ("大图缩放", "捏合 / 双击 / ＋ － 缩放，拖拽平移"),
@@ -105,7 +106,7 @@ struct ShortcutGuideView: View {
         ("A", "全选当前筛选结果"),
         ("Esc", "退出多选 / 取消输入焦点"),
         ("⌘O", "打开文件夹"),
-        ("⌘C", "复制所选照片的原文件，可在 Finder 中粘贴")
+        ("⌘C", "复制所选版本；裁剪后的照片可在 Finder 中粘贴")
     ]
 
     var body: some View {
@@ -280,6 +281,14 @@ struct PhotoSinglePreviewView: View {
                 Image(systemName: "plus.magnifyingglass")
             }
             .disabled(scale >= maxScale)
+
+            if !photo.isVideoOnly {
+                Divider().frame(height: 16)
+                Button { store.editCrop(photo) } label: {
+                    Image(systemName: "crop.rotate")
+                }
+                .help("裁剪 / 编辑版本 (C)")
+            }
         }
         .font(.system(size: 13, weight: .medium))
         .buttonStyle(.plain)

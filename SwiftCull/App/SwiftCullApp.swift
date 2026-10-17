@@ -30,6 +30,11 @@ struct SwiftCullApp: App {
                 }
                 .keyboardShortcut("a", modifiers: .command)
                 Divider()
+                Button("裁剪 / 编辑版本… (C)") {
+                    store.editSelectedCrop()
+                }
+                .disabled(!store.canEditSelectedCrop)
+                Divider()
                 Button("评分 1 星") {
                     if let photo = store.selectedPhoto { store.setRating(1, for: photo) }
                 }

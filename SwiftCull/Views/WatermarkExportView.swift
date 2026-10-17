@@ -46,12 +46,9 @@ struct WatermarkExportView: View {
         guard let currentItem,
               currentConfiguration?.matchOrientation == true ||
                 (currentConfiguration == nil && currentItem.matchOrientation),
-              let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: currentItem.sourcePath) as CFURL, nil),
-              let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
-                kCGImageSourceCreateThumbnailFromImageAlways: true,
-                kCGImageSourceCreateThumbnailWithTransform: true,
-                kCGImageSourceThumbnailMaxPixelSize: 128
-              ] as CFDictionary) else { return currentPreset }
+              let image = try? CropImageService.image(path: currentItem.sourcePath,
+                                                      crop: currentItem.photo.cropRect,
+                                                      maxPixelSize: 128) else { return currentPreset }
         return currentPreset.resolved(isPortrait: image.height > image.width, matchOrientation: true)
     }
 
@@ -154,7 +151,8 @@ struct WatermarkExportView: View {
                 currentIndex = index
             } label: {
                 HStack(spacing: 7) {
-                    AsyncThumbnailView(photoId: item.photo.id, imagePath: item.sourcePath, size: 46)
+                    AsyncThumbnailView(photoId: item.photo.id, imagePath: item.sourcePath, size: 46,
+                                       crop: item.photo.cropRect)
                         .frame(width: 46, height: 46)
                         .clipped()
                         .clipShape(RoundedRectangle(cornerRadius: 4))

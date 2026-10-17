@@ -770,6 +770,23 @@ struct PhotoGridContent: View {
             isPrimary: store.selectedPhoto?.id == photo.id,
             isSelectMode: isSelectMode
         )
+        .overlay(alignment: .bottomTrailing) {
+            let count = store.versionCount(for: photo)
+            if !photo.isVersionCopy && count > 1 {
+                Button {
+                    store.toggleVersions(for: photo)
+                } label: {
+                    Label("\(count)", systemImage: "square.stack.3d.up")
+                        .font(.system(size: 9, weight: .bold))
+                        .padding(4)
+                        .foregroundStyle(.white)
+                        .background(.black.opacity(0.65), in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .help(store.expandedVersionSources.contains(photo.sourceID) ? "收起裁剪版本" : "展开裁剪版本")
+                .padding(4)
+            }
+        }
         .id(photo.id)
         .contextMenu {
             PhotoContextMenu(store: store, photo: photo) { photos in

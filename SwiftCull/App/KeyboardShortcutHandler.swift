@@ -33,6 +33,12 @@ enum KeyboardShortcutHandler {
             return false
         }
 
+        // Let sheets and dialogs own their keys, including the crop editor's Space+drag gesture.
+        if NSApp.modalWindow != nil || NSApp.keyWindow?.isSheet == true ||
+           NSApp.keyWindow?.attachedSheet != nil {
+            return false
+        }
+
         if keyCode == 8, flags.contains(.command),
            !flags.contains(.control), !flags.contains(.option), !flags.contains(.shift),
            !isTextFieldFocused, NSApp.modalWindow == nil,
@@ -42,14 +48,10 @@ enum KeyboardShortcutHandler {
 
         switch keyCode {
         case 49: // Space
-            guard !hasCommandModifier else { return false }
+            guard !hasCommandModifier, NSApp.keyWindow?.isSheet != true,
+                  NSApp.keyWindow?.attachedSheet == nil else { return false }
             if let photo = store.selectedPhoto {
-                let path = photo.primaryImagePath
-                if !path.isEmpty {
-                    QuickLookHelper.shared.preview(URL(fileURLWithPath: path))
-                } else if let movPath = photo.movPath {
-                    QuickLookHelper.shared.preview(URL(fileURLWithPath: movPath))
-                }
+                store.previewPhoto(photo)
                 return true
             }
         case 125: // Down
@@ -123,6 +125,9 @@ enum KeyboardShortcutHandler {
             case "e":
                 store.toggleSinglePreview()
                 return true
+            case "c":
+                guard flags.isDisjoint(with: [.shift, .function]) else { return false }
+                return store.editSelectedCrop()
             case "q":
                 if store.isSelectMode {
                     store.confirmSelectMode()
