@@ -3,23 +3,68 @@ name: Build & Release
 on:
   push:
     branches: [ "main", "release/**" ]
-    tags: [ "v*" ]
+    paths-ignore:
+      - '**/*.md'
+      - '**/*.mdx'
+      - '**/*.rst'
+      - 'docs/**'
+      - 'imgs/badges/**'
+      - 'LICENSE'
+      - 'LICENSE.*'
   pull_request:
     branches: [ "main" ]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Serialize main builds/releases so two pushes cannot choose the same version.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
     runs-on: macos-latest
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Determine release version
+        id: version
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          python3 <<'PY'
+          import os
+          import re
+          import subprocess
+
+          def stable_tags(*args):
+              tags = subprocess.check_output(["git", "tag", *args], text=True).splitlines()
+              return [
+                  (tuple(map(int, match.groups())), tag)
+                  for tag in tags
+                  if (match := re.fullmatch(r"v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", tag))
+              ]
+
+          current = stable_tags("--points-at", "HEAD")
+          if current:
+              # Re-running a published commit reuses its tag.
+              _, tag = max(current)
+          else:
+              existing = stable_tags("--list")
+              major, minor, patch = max(existing)[0] if existing else (0, 1, -1)
+              tag = f"v{major}.{minor}.{patch + 1}"
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write(f"tag={tag}\nversion={tag[1:]}\n")
+          print(f"Release version: {tag}")
+          PY
 
       - name: Select latest Xcode
         run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
@@ -34,7 +79,13 @@ jobs:
         run: xcodegen generate
 
       - name: Build
+        env:
+          APP_VERSION: ${{ steps.version.outputs.version }}
         run: |
+          set --
+          if [[ -n "$APP_VERSION" ]]; then
+            set -- MARKETING_VERSION="$APP_VERSION" CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER"
+          fi
           xcodebuild \
             -project SwiftCull.xcodeproj \
             -scheme SwiftCull \
@@ -43,6 +94,7 @@ jobs:
             CONFIGURATION_BUILD_DIR="$RUNNER_TEMP/build/Release" \
             CODE_SIGN_IDENTITY="-" \
             CODE_SIGN_STYLE=Automatic \
+            "$@" \
             build
 
       - name: Watermark rendering smoke test
@@ -92,8 +144,10 @@ jobs:
 
   release:
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: macos-latest
+    permissions:
+      contents: write
 
     steps:
       - uses: actions/download-artifact@v4
@@ -103,5 +157,11 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ needs.build.outputs.tag }}
+          name: ${{ needs.build.outputs.tag }}
+          target_commitish: ${{ github.sha }}
           files: SwiftCull.dmg
+          fail_on_unmatched_files: true
           generate_release_notes: true
+          prerelease: false
+          make_latest: true
