@@ -7,10 +7,7 @@
   <a href="https://github.com/SAN-SHIa/SwiftCull/blob/main/LICENSE"><img src="./imgs/badges/license.svg" alt="项目代码许可证：MIT" /></a>
   <a href="https://github.com/SAN-SHIa/SwiftCull/stargazers"><img src="./imgs/badges/stars.svg" alt="GitHub Stars" /></a>
   <img src="./imgs/badges/views-history.svg" alt="历史访问次数：299" />
-  <img src="https://visitor-badge.laobi.icu/badge?page_id=SAN-SHIa.SwiftCull&amp;left_text=new+views" alt="统计服务切换后的新增访问次数" />
 </p>
-
-<p align="center"><sub>访问次数 = 历史 299 次 + 新增访问次数。历史值于 2026-10-17 从原 Komarev 计数器核对保留；新增计数由 Visitor Badge 提供，受图片代理缓存影响，不代表独立访客数。</sub></p>
 
 <p align="center">
   <img src="./imgs/post.png" alt="SwiftCull 照片筛选界面" />
