@@ -6,6 +6,7 @@
   <a href="https://github.com/SAN-SHIa/SwiftCull/actions/workflows/build.yml"><img src="https://github.com/SAN-SHIa/SwiftCull/actions/workflows/build.yml/badge.svg" alt="构建状态" /></a>
   <a href="https://github.com/SAN-SHIa/SwiftCull/blob/main/LICENSE"><img src="./imgs/badges/license.svg" alt="项目代码许可证：MIT" /></a>
   <a href="https://github.com/SAN-SHIa/SwiftCull/stargazers"><img src="./imgs/badges/stars.svg" alt="GitHub Stars" /></a>
+  <img src="https://komarev.com/ghpvc/?username=SAN-SHIa-SwiftCull&amp;color=007ec6&amp;label=views&amp;style=flat-square" alt="项目访问次数" />
 </p>
 
 <p align="center">
