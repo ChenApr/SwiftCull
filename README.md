@@ -5,7 +5,8 @@
   <img src="https://img.shields.io/badge/macOS-14.0%2B-blue?style=flat-square" alt="系统要求：macOS 14.0 及以上" />
   <a href="https://github.com/SAN-SHIa/SwiftCull/actions/workflows/build.yml"><img src="https://github.com/SAN-SHIa/SwiftCull/actions/workflows/build.yml/badge.svg" alt="构建状态" /></a>
   <a href="https://github.com/SAN-SHIa/SwiftCull/blob/main/LICENSE"><img src="https://img.shields.io/github/license/SAN-SHIa/SwiftCull?style=flat-square" alt="项目代码许可证：MIT" /></a>
-  <a href="https://github.com/SAN-SHIa/SwiftCull/stargazers"><img src="https://img.shields.io/github/stars/SAN-SHIa/SwiftCull?style=flat-square" alt="GitHub Stars" /></a>
+  <a href="https://github.com/SAN-SHIa/SwiftCull/stargazers"><img src="https://img.shields.io/github/stars/SAN-SHIa/SwiftCull?style=flat-square&amp;label=stars" alt="GitHub Stars" /></a>
+  <img src="https://komarev.com/ghpvc/?username=SAN-SHIa-SwiftCull&amp;color=brightgreen&amp;label=views&amp;style=flat-square" alt="项目访问量" />
 </p>
 
 <p align="center">
