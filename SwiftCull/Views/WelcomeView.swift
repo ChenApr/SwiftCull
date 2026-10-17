@@ -91,9 +91,12 @@ struct ShortcutGuideView: View {
     @Environment(\.dismiss) private var dismiss
 
     private let shortcuts: [(String, String)] = [
-        ("↑ ↓ ← →", "按网格位置选择照片"),
+        ("↑ ↓ ← →", "普通浏览：按网格位置选择照片"),
         ("拖拽框选", "鼠标框选多张照片"),
-        ("Space", "Quick Look 预览"),
+        ("Space", "普通浏览：Quick Look 预览；播放模式：播放 / 暂停"),
+        ("V", "进入 / 退出当前照片的视频播放模式"),
+        ("← →", "播放模式：前后跳转 5 秒；Shift + 左右逐帧"),
+        ("↑ ↓", "播放模式：调节音量"),
         ("E", "网格 / 大图切换"),
         ("C", "裁剪单张照片 / 编辑当前版本"),
         ("Q", "完成并退出多选"),
@@ -183,25 +186,35 @@ struct PhotoSinglePreviewView: View {
         ZStack {
             background
 
-            GeometryReader { geo in
-                DetailThumbnailView(photo: photo, targetSize: 1800)
-                    .scaleEffect(scale)
-                    .offset(offset)
-                    .frame(width: geo.size.width, height: geo.size.height)
-                    .contentShape(Rectangle())
-                    .gesture(magnifyGesture(in: geo.size))
-                    .simultaneousGesture(panGesture(in: geo.size))
-                    .onTapGesture(count: 2) { toggleZoom() }
-                    .onTapGesture(count: 1) { resignFocus() }
-                    .onAppear { containerSize = geo.size }
-                    .onChange(of: geo.size) { _, newValue in containerSize = newValue }
+            if store.isVideoPlaybackMode, photo.movPath != nil {
+                VideoPlaybackView(controller: store.videoPlaybackController, displayName: photo.displayName) {
+                    store.exitVideoPlaybackMode()
+                }
+            } else {
+                GeometryReader { geo in
+                    DetailThumbnailView(photo: photo, targetSize: 1800)
+                        .scaleEffect(scale)
+                        .offset(offset)
+                        .frame(width: geo.size.width, height: geo.size.height)
+                        .contentShape(Rectangle())
+                        .gesture(magnifyGesture(in: geo.size))
+                        .simultaneousGesture(panGesture(in: geo.size))
+                        .onTapGesture(count: 2) { toggleZoom() }
+                        .onTapGesture(count: 1) { resignFocus() }
+                        .onAppear { containerSize = geo.size }
+                        .onChange(of: geo.size) { _, newValue in containerSize = newValue }
+                }
+                .padding(.horizontal, 24)
+                .padding(.vertical, 20)
+                .clipped()
             }
-            .padding(.horizontal, 24)
-            .padding(.vertical, 20)
-            .clipped()
         }
-        .overlay(alignment: .bottom) { infoBar }
-        .overlay(alignment: .topTrailing) { zoomControls }
+        .overlay(alignment: .bottom) {
+            if !store.isVideoPlaybackMode { infoBar }
+        }
+        .overlay(alignment: .topTrailing) {
+            if !store.isVideoPlaybackMode { zoomControls }
+        }
         .contentShape(Rectangle())
         .contextMenu {
             PhotoContextMenu(store: store, photo: photo, useSelection: false) { photos in
@@ -259,6 +272,15 @@ struct PhotoSinglePreviewView: View {
 
     private var zoomControls: some View {
         HStack(spacing: 4) {
+            if photo.movPath != nil {
+                Button { store.toggleVideoPlaybackMode(for: photo) } label: {
+                    Image(systemName: store.isVideoPlaybackMode && store.selectedPhoto?.id == photo.id
+                          ? "stop.circle" : "play.rectangle")
+                }
+                .help(store.isVideoPlaybackMode && store.selectedPhoto?.id == photo.id
+                      ? "退出播放 (V)" : "播放视频 (V)")
+                Divider().frame(height: 16)
+            }
             Button {
                 zoomBy(1 / 1.5)
             } label: {

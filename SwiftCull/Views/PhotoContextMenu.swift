@@ -63,6 +63,14 @@ struct PhotoContextMenu: View {
 
         Divider()
 
+        if !isBatch && photo.movPath != nil {
+            Button { store.toggleVideoPlaybackMode(for: photo) } label: {
+                let isCurrentPlayback = store.isVideoPlaybackMode && store.selectedPhoto?.id == photo.id
+                Label(isCurrentPlayback ? "退出播放 (V)" : "播放视频 (V)",
+                      systemImage: isCurrentPlayback ? "stop.circle" : "play.rectangle")
+            }
+        }
+
         if !isBatch && !photo.isVideoOnly {
             Button { store.editCrop(photo) } label: {
                 Label("裁剪 / 编辑版本…", systemImage: "crop.rotate")
