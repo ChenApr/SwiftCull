@@ -16,20 +16,17 @@ struct FlowLayout: Layout {
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) {
-        let result: Cache
-        if cache.positions.count == subviews.count {
-            result = cache
-        } else {
-            result = arrange(proposal: proposal, subviews: subviews)
-            cache = result
-        }
+        // A cached arrangement may have been measured before a sidebar/inspector resize.
+        let result = arrange(proposal: ProposedViewSize(width: bounds.width, height: proposal.height),
+                             subviews: subviews)
+        cache = result
         for (index, position) in result.positions.enumerated() {
             subviews[index].place(at: CGPoint(x: bounds.minX + position.x, y: bounds.minY + position.y), proposal: .unspecified)
         }
     }
 
     private func arrange(proposal: ProposedViewSize, subviews: Subviews) -> (size: CGSize, positions: [CGPoint]) {
-        let maxWidth = proposal.width ?? .infinity
+        let maxWidth = max(1, proposal.width ?? subviews.map { $0.sizeThatFits(.unspecified).width }.max() ?? 1)
         var positions: [CGPoint] = []
         var currentX: CGFloat = 0
         var currentY: CGFloat = 0
@@ -46,9 +43,9 @@ struct FlowLayout: Layout {
             positions.append(CGPoint(x: currentX, y: currentY))
             rowHeight = max(rowHeight, size.height)
             currentX += size.width + spacing
-            maxX = max(maxX, currentX)
+            maxX = max(maxX, currentX - spacing)
         }
 
-        return (CGSize(width: maxX, height: currentY + rowHeight), positions)
+        return (CGSize(width: min(maxX, maxWidth), height: currentY + rowHeight), positions)
     }
 }

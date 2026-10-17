@@ -9,7 +9,6 @@ struct SwiftCullApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(store)
-                .frame(minWidth: 1000, minHeight: 600)
                 .onAppear {
                     setupKeyboardMonitor()
                 }
@@ -29,6 +28,11 @@ struct SwiftCullApp: App {
                     store.selectAll()
                 }
                 .keyboardShortcut("a", modifiers: .command)
+                Divider()
+                Button("裁剪 / 编辑版本… (C)") {
+                    store.editSelectedCrop()
+                }
+                .disabled(!store.canEditSelectedCrop)
                 Divider()
                 Button("评分 1 星") {
                     if let photo = store.selectedPhoto { store.setRating(1, for: photo) }

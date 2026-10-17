@@ -53,6 +53,8 @@ struct PhotoDetailView: View {
     var showsPreview = true
     @State private var exifInfo: PhotoExifInfo?
     @State private var exifTask: Task<Void, Never>?
+    @State private var watermarkSelection: WatermarkPhotoSelection?
+    @State private var versionNameDraft = ""
 
     private var photo: PhotoEntry? {
         store.selectedPhoto
@@ -69,6 +71,7 @@ struct PhotoDetailView: View {
                 ScrollView {
                     VStack(spacing: 8) {
                         infoSection(photo)
+                        versionSection(photo)
                         exifSection(photo)
                         ratingSection(photo)
                         tagSection(photo)
@@ -79,9 +82,10 @@ struct PhotoDetailView: View {
                 .scrollIndicators(.automatic)
             }
             .background(detailBackground)
-            .frame(minWidth: 300, idealWidth: 400)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .onAppear {
                 loadExif(for: photo)
+                versionNameDraft = photo.displayName
             }
             .onDisappear {
                 exifTask?.cancel()
@@ -89,6 +93,10 @@ struct PhotoDetailView: View {
             }
             .onChange(of: photo.id) { _, _ in
                 loadExif(for: photo)
+                versionNameDraft = photo.displayName
+            }
+            .sheet(item: $watermarkSelection) { selection in
+                WatermarkExportView(store: store, photos: selection.photos)
             }
         } else {
             VStack {
@@ -112,10 +120,29 @@ struct PhotoDetailView: View {
                 }
                 .frame(height: 220)
                 .clipped()
+                .contextMenu {
+                    PhotoContextMenu(store: store, photo: photo, useSelection: false) { photos in
+                        watermarkSelection = WatermarkPhotoSelection(photos: photos)
+                    }
+                }
 
             HStack {
                 fileTypePill(photo)
                 Spacer()
+                if photo.movPath != nil {
+                    Button {
+                        store.toggleVideoPlaybackMode(for: photo)
+                    } label: {
+                        Label(store.isVideoPlaybackMode && store.selectedPhoto?.id == photo.id
+                              ? "退出播放" : "播放视频",
+                              systemImage: store.isVideoPlaybackMode && store.selectedPhoto?.id == photo.id
+                              ? "stop.circle" : "play.rectangle")
+                            .font(.caption2.weight(.semibold))
+                    }
+                    .buttonStyle(.plain)
+                    .help(store.isVideoPlaybackMode && store.selectedPhoto?.id == photo.id
+                          ? "退出播放 (V)" : "播放视频 (V)")
+                }
                 Button {
                     openQuickLook(photo)
                 } label: {
@@ -141,14 +168,39 @@ struct PhotoDetailView: View {
     }
 
     private func openQuickLook(_ photo: PhotoEntry) {
-        let path = photo.primaryImagePath
-        guard !path.isEmpty else {
-            if let movPath = photo.movPath {
-                QuickLookHelper.shared.preview(URL(fileURLWithPath: movPath))
+        store.previewPhoto(photo)
+    }
+
+    @ViewBuilder
+    private func versionSection(_ photo: PhotoEntry) -> some View {
+        let versions = store.versions(for: photo)
+        if versions.count > 1 || photo.cropRect != nil {
+            DetailCard(title: "裁剪版本", systemImage: "square.stack.3d.up") {
+                VStack(alignment: .leading, spacing: 8) {
+                    if versions.count > 1 {
+                        Menu {
+                            ForEach(versions) { version in
+                                Button(version.isVersionCopy ? version.displayName : "主版本") {
+                                    store.expandedVersionSources.insert(photo.sourceID)
+                                    store.applyFilters()
+                                    store.selectPhoto(version)
+                                }
+                            }
+                        } label: {
+                            Label(photo.isVersionCopy ? photo.displayName : "主版本", systemImage: "square.stack")
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                    if photo.isVersionCopy {
+                        HStack {
+                            TextField("版本名称", text: $versionNameDraft)
+                            Button("重命名") { store.renameVersion(photo, to: versionNameDraft) }
+                        }
+                        Button("删除此版本", role: .destructive) { store.removeVersion(photo) }
+                    }
+                }
             }
-            return
         }
-        QuickLookHelper.shared.preview(URL(fileURLWithPath: path))
     }
 
     private func infoSection(_ photo: PhotoEntry) -> some View {
@@ -218,7 +270,7 @@ struct PhotoDetailView: View {
     private func ratingSection(_ photo: PhotoEntry) -> some View {
         DetailCard(title: "评分", systemImage: "star") {
             RatingView(rating: photo.rating) { newRating in
-                store.setRating(newRating, for: photo)
+                store.contextSetRating(newRating, clicked: photo, useSelection: false)
             }
         }
     }
@@ -231,13 +283,13 @@ struct PhotoDetailView: View {
                         FlowLayout(spacing: 6) {
                             ForEach(photo.tags, id: \.self) { tag in
                                 TagChip(tag: tag) {
-                                    store.removeTag(tag, from: photo)
+                                    store.contextToggleTag(tag, clicked: photo, useSelection: false)
                                 }
                             }
                         }
                         Spacer(minLength: 6)
                         Button {
-                            store.clearTags(for: photo)
+                            store.contextClearTags(clicked: photo, useSelection: false)
                         } label: {
                             Image(systemName: "tag.slash")
                                 .font(.system(size: 12, weight: .semibold))
@@ -260,7 +312,7 @@ struct PhotoDetailView: View {
                     FlowLayout(spacing: 6) {
                         ForEach(store.availableTags.filter { !photo.tags.contains($0.name) }) { tag in
                             Button {
-                                store.addTag(tag.name, to: photo)
+                                store.contextToggleTag(tag.name, clicked: photo, useSelection: false)
                             } label: {
                                 HStack(spacing: 5) {
                                     Circle()
@@ -285,36 +337,63 @@ struct PhotoDetailView: View {
     private func actionSection(_ photo: PhotoEntry) -> some View {
         DetailCard(title: "操作", systemImage: "slider.horizontal.3") {
             VStack(spacing: 6) {
-                let activePhotos: [PhotoEntry] = {
-                    if store.selectedPhotos.count > 1 {
-                        return store.selectedPhotoEntries
-                    }
-                    return [photo]
-                }()
-
-                let jpgFiles = activePhotos.compactMap(\.jpgPath).map { URL(fileURLWithPath: $0) }
-                let rawFiles = activePhotos.compactMap(\.nefPath).map { URL(fileURLWithPath: $0) }
-                let movFiles = activePhotos.compactMap(\.movPath).map { URL(fileURLWithPath: $0) }
-                let allFiles = jpgFiles + rawFiles + movFiles
+                let allFiles = [photo.jpgPath, photo.nefPath, photo.movPath]
+                    .compactMap { $0.map { URL(fileURLWithPath: $0) } }
 
                 if !allFiles.isEmpty {
+                    if photo.movPath != nil {
+                        Button { store.toggleVideoPlaybackMode(for: photo) } label: {
+                            actionLabel(store.isVideoPlaybackMode && store.selectedPhoto?.id == photo.id
+                                        ? "退出播放" : "播放视频",
+                                        systemImage: store.isVideoPlaybackMode && store.selectedPhoto?.id == photo.id
+                                        ? "stop.circle" : "play.rectangle")
+                        }
+                        .buttonStyle(InspectorActionButtonStyle())
+                        .help(store.isVideoPlaybackMode && store.selectedPhoto?.id == photo.id
+                              ? "退出播放 (V)" : "播放视频 (V)")
+                        Button { store.openLivePhotoEditor(for: photo) } label: {
+                            actionLabel("制作实况照片…", systemImage: "livephoto")
+                        }
+                        .buttonStyle(InspectorActionButtonStyle())
+                    }
+                    if !photo.hasMov {
+                        Button { store.editCrop(photo) } label: {
+                            actionLabel("裁剪 / 编辑版本…", systemImage: "crop.rotate")
+                        }
+                        .buttonStyle(InspectorActionButtonStyle())
+                        .help("裁剪 / 编辑版本 (C)")
+                    }
                     Button {
                         NSWorkspace.shared.activateFileViewerSelecting(allFiles)
                     } label: {
                         actionLabel("在 Finder 中显示", systemImage: "folder")
                     }
                     .buttonStyle(InspectorActionButtonStyle())
+
+                    Button {
+                        store.exportOriginalPhoto(photo)
+                    } label: {
+                        actionLabel(photo.cropRect == nil ? "导出此照片原文件…" : "导出此裁剪版本…",
+                                    systemImage: "square.and.arrow.up")
+                    }
+                    .buttonStyle(InspectorActionButtonStyle())
+                    .disabled(store.isExporting)
+                }
+
+                if photo.hasJpg || photo.hasNef {
+                    Button {
+                        watermarkSelection = WatermarkPhotoSelection(photos: [photo])
+                    } label: {
+                        actionLabel("单张加水印并导出…", systemImage: "photo.badge.plus")
+                    }
+                    .buttonStyle(InspectorActionButtonStyle())
+                    .disabled(store.isExporting)
                 }
 
                 Button(role: .destructive) {
-                    if store.selectedPhotos.count > 1 {
-                        store.requestDeleteSelected()
-                    } else {
-                        store.requestDelete(photo)
-                    }
+                    store.requestDelete(photo)
                 } label: {
-                    let count = store.selectedPhotos.count
-                    actionLabel(count > 1 ? "移至废纸篓 (\(count) 张)" : "移至废纸篓 (所有格式)", systemImage: "trash")
+                    actionLabel("移至废纸篓 (此照片所有格式)", systemImage: "trash")
                 }
                 .buttonStyle(InspectorActionButtonStyle(isDestructive: true))
             }

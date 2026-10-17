@@ -36,10 +36,14 @@ struct PhotoGridView: View {
     @AppStorage("photoGroupingMode") private var groupingMode: PhotoGroupingMode = .all
     @State private var lastSelectedPhoto: PhotoEntry?
     @State private var baseGridSize: Double?
+    @State private var selectedWatermarkSelection: WatermarkPhotoSelection?
     private let minGridSize: Double = 80
     private let maxGridSize: Double = 220
 
     private var isSelectMode: Bool { store.isSelectMode }
+    private var watermarkableSelectedPhotos: [PhotoEntry] {
+        store.selectedPhotoEntries.filter { $0.hasJpg || $0.hasNef }
+    }
 
     private var columns: [GridItem] {
         [GridItem(.adaptive(minimum: CGFloat(gridSize), maximum: CGFloat(gridSize) + 50), spacing: 4)]
@@ -91,6 +95,9 @@ struct PhotoGridView: View {
         .animation(.snappy(duration: 0.24), value: store.isSelectMode)
         .animation(.snappy(duration: 0.2), value: store.selectedCount)
         .animation(.snappy(duration: 0.24), value: store.isEnriching)
+        .sheet(item: $selectedWatermarkSelection) { selection in
+            WatermarkExportView(store: store, photos: selection.photos)
+        }
     }
 
     @ViewBuilder
@@ -118,21 +125,50 @@ struct PhotoGridView: View {
     }
 
     private var gridToolbar: some View {
-        HStack(spacing: 12) {
-            normalToolbar
+        GeometryReader { geometry in
+            toolbarLayout(for: geometry.size.width)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        }
+        .frame(height: 26)
+    }
 
-            Spacer(minLength: 24)
-
+    @ViewBuilder
+    private func toolbarLayout(for width: CGFloat) -> some View {
+        if width >= 650 {
             HStack(spacing: 12) {
-                Slider(value: $gridSize, in: minGridSize...maxGridSize)
-                    .frame(width: 150)
-                    .help("缩略图 \(Int(gridSize))px")
-
-                Image(systemName: "square.grid.2x2")
-                    .foregroundStyle(.secondary)
-                    .frame(width: 24, height: 24)
+                normalToolbar
+                Spacer(minLength: 24)
+                gridSizeControl(width: 150)
             }
-            .padding(.trailing, 8)
+        } else if width >= 500 {
+            HStack(spacing: 8) {
+                Text("\(store.photoCount) 张")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: true, vertical: false)
+                selectionMenu
+                groupingPicker(width: 120)
+                    .labelsHidden()
+                Spacer(minLength: 4)
+                gridSizeControl(width: 80)
+            }
+        } else if width >= 420 {
+            HStack(spacing: 8) {
+                Text("\(store.photoCount) 张")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: true, vertical: false)
+                selectionMenu
+                compactGroupingMenu
+                Spacer(minLength: 0)
+                gridSizeControl(width: 64)
+            }
+        } else {
+            HStack(spacing: 8) {
+                selectionMenu
+                compactGroupingMenu
+                Spacer(minLength: 0)
+            }
         }
     }
 
@@ -142,58 +178,98 @@ struct PhotoGridView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-            Menu {
-                Button {
-                    beginSelectMode()
-                } label: {
-                    Label("进入选择模式", systemImage: "checkmark.circle")
-                }
+            selectionMenu
+            groupingPicker(width: 148)
+        }
+    }
 
-                Divider()
-
-                Button {
-                    selectPhotos(.all)
-                } label: {
-                    Label("选择所有照片", systemImage: "photo.stack")
-                }
-
-                Button {
-                    selectPhotos(.month)
-                } label: {
-                    Label("选择当前月份", systemImage: "calendar")
-                }
-                .disabled(selectionReferencePhoto == nil)
-
-                Button {
-                    selectPhotos(.day)
-                } label: {
-                    Label("选择当前日期", systemImage: "calendar.day.timeline.left")
-                }
-                .disabled(selectionReferencePhoto == nil)
+    private var selectionMenu: some View {
+        Menu {
+            Button {
+                beginSelectMode()
             } label: {
-                Label("选择", systemImage: "checkmark.circle")
-                    .font(.caption)
+                Label("进入选择模式", systemImage: "checkmark.circle")
             }
-            .menuStyle(.button)
-            .buttonStyle(.bordered)
-            .controlSize(.small)
 
+            Divider()
+
+            Button {
+                selectPhotos(.all)
+            } label: {
+                Label("选择所有照片", systemImage: "photo.stack")
+            }
+
+            Button {
+                selectPhotos(.month)
+            } label: {
+                Label("选择当前月份", systemImage: "calendar")
+            }
+            .disabled(selectionReferencePhoto == nil)
+
+            Button {
+                selectPhotos(.day)
+            } label: {
+                Label("选择当前日期", systemImage: "calendar.day.timeline.left")
+            }
+            .disabled(selectionReferencePhoto == nil)
+        } label: {
+            Label("选择", systemImage: "checkmark.circle")
+                .font(.caption)
+        }
+        .menuStyle(.button)
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
+    private func groupingPicker(width: CGFloat) -> some View {
+        Picker("分组", selection: $groupingMode) {
+            ForEach(PhotoGroupingMode.allCases) { mode in
+                Label(mode.title, systemImage: mode.systemImage).tag(mode)
+            }
+        }
+        .pickerStyle(.segmented)
+        .controlSize(.small)
+        .frame(width: width)
+        .help("按拍摄时间分组")
+    }
+
+    private var compactGroupingMenu: some View {
+        Menu {
             Picker("分组", selection: $groupingMode) {
                 ForEach(PhotoGroupingMode.allCases) { mode in
                     Label(mode.title, systemImage: mode.systemImage).tag(mode)
                 }
             }
-            .pickerStyle(.segmented)
-            .controlSize(.small)
-            .frame(width: 148)
-            .help("按拍摄时间分组")
+        } label: {
+            Label(groupingMode.title, systemImage: groupingMode.systemImage)
+        }
+        .menuStyle(.button)
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .fixedSize(horizontal: true, vertical: false)
+        .help("按拍摄时间分组")
+    }
+
+    private func gridSizeControl(width: CGFloat) -> some View {
+        HStack(spacing: 8) {
+            Slider(value: $gridSize, in: minGridSize...maxGridSize)
+                .frame(width: width)
+                .help("缩略图 \(Int(gridSize))px")
+            Image(systemName: "square.grid.2x2")
+                .foregroundStyle(.secondary)
+                .frame(width: 24, height: 24)
         }
     }
 
     private var selectionCommandPanel: some View {
-        ViewThatFits(in: .horizontal) {
-            regularSelectionPanel
-            denseSelectionPanel
+        VStack(alignment: .leading, spacing: 7) {
+            ViewThatFits(in: .horizontal) {
+                regularSelectionPanel
+                denseSelectionPanel
+                compactSelectionPanel
+            }
+            selectionExportActions
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
@@ -211,6 +287,49 @@ struct PhotoGridView: View {
                 .strokeBorder(Color.primary.opacity(0.09), lineWidth: 0.7)
         }
         .frame(maxWidth: .infinity, alignment: .center)
+    }
+
+    private var selectionExportActions: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) {
+                Text("仅对已选 \(store.selectedCount) 张")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 4)
+                Button {
+                    store.exportSelectedPhotos()
+                } label: {
+                    Label("导出所选照片…", systemImage: "square.and.arrow.up")
+                }
+                .disabled(store.selectedCount == 0 || store.isExporting)
+                Button {
+                    selectedWatermarkSelection = WatermarkPhotoSelection(photos: watermarkableSelectedPhotos)
+                } label: {
+                    Label("所选 \(watermarkableSelectedPhotos.count) 张加水印并导出…", systemImage: "photo.badge.plus")
+                }
+                .disabled(store.isExporting || watermarkableSelectedPhotos.isEmpty)
+            }
+
+            HStack {
+                Text("仅对已选 \(store.selectedCount) 张")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Menu {
+                    Button("导出所选照片…") { store.exportSelectedPhotos() }
+                        .disabled(store.selectedCount == 0 || store.isExporting)
+                    Button("所选 \(watermarkableSelectedPhotos.count) 张加水印并导出…") {
+                        selectedWatermarkSelection = WatermarkPhotoSelection(photos: watermarkableSelectedPhotos)
+                    }
+                    .disabled(store.isExporting || watermarkableSelectedPhotos.isEmpty)
+                } label: {
+                    Label("导出所选…", systemImage: "square.and.arrow.up")
+                }
+            }
+        }
+        .font(.caption)
+        .buttonStyle(.bordered)
+        .controlSize(.small)
     }
 
     private var regularSelectionPanel: some View {
@@ -239,6 +358,36 @@ struct PhotoGridView: View {
             Spacer(minLength: 6)
             deleteSection
         }
+    }
+
+    private var compactSelectionPanel: some View {
+        HStack(spacing: 7) {
+            compactSelectionCommitSection
+            Menu {
+                Button("清除评分") { store.batchClearRating() }
+                ForEach(1...5, id: \.self) { rating in
+                    Button("\(rating) 星") { store.batchSetRating(rating) }
+                }
+            } label: {
+                Label("评分", systemImage: "star")
+            }
+            .disabled(store.selectedCount == 0)
+            Menu {
+                ForEach(store.availableTags) { tag in
+                    Button(tag.displayName) { store.batchAddTag(tag.name) }
+                }
+                Divider()
+                Button("清除标签") { store.batchClearTags() }
+            } label: {
+                Label("标签", systemImage: "tag")
+            }
+            .disabled(store.selectedCount == 0)
+            Spacer(minLength: 0)
+            deleteSection
+        }
+        .font(.caption)
+        .menuStyle(.button)
+        .controlSize(.small)
     }
 
     private var selectionCommitSection: some View {
@@ -499,7 +648,64 @@ struct PhotoGridSection: Identifiable {
     let id: String
     let title: String
     let subtitle: String
-    let photos: [PhotoEntry]
+    let photoIndices: [Int]
+}
+
+/// The layout is stable while selection and marks change. Store only indices so cards
+/// always read the current PhotoEntry rather than a stale cached rating or tag.
+private final class PhotoGroupCache {
+    private var version = -1
+    private var mode: PhotoGroupingMode = .all
+    private var ascending = true
+    private var cached: [PhotoGridSection] = []
+
+    func sections(photos: [PhotoEntry], version: Int, mode: PhotoGroupingMode,
+                  ascending: Bool) -> [PhotoGridSection] {
+        guard version != self.version || mode != self.mode || ascending != self.ascending else {
+            return cached
+        }
+        self.version = version
+        self.mode = mode
+        self.ascending = ascending
+
+        if mode == .all {
+            cached = [PhotoGridSection(id: "all", title: "所有照片",
+                                       subtitle: "\(photos.count) 张",
+                                       photoIndices: Array(photos.indices))]
+            return cached
+        }
+
+        let calendar = Calendar.current
+        let granularity: Calendar.Component = mode == .month ? .month : .day
+        let components: Set<Calendar.Component> = mode == .month ? [.year, .month] : [.year, .month, .day]
+        let titleFormatter = DateFormatter()
+        titleFormatter.locale = Locale(identifier: "zh_CN")
+        titleFormatter.dateFormat = mode == .month ? "yyyy年M月" : "yyyy年M月d日"
+        let weekdayFormatter = DateFormatter()
+        weekdayFormatter.locale = Locale(identifier: "zh_CN")
+        weekdayFormatter.dateFormat = "EEEE"
+
+        var grouped: [Date: [Int]] = [:]
+        for index in photos.indices {
+            let date = photos[index].fileDate
+            let key = calendar.date(from: calendar.dateComponents(components, from: date)) ?? date
+            grouped[key, default: []].append(index)
+        }
+        cached = grouped.keys.sorted(by: ascending ? (<) : (>)).map { date in
+            let indices = (grouped[date] ?? []).sorted {
+                ascending ? photos[$0].fileDate < photos[$1].fileDate
+                          : photos[$0].fileDate > photos[$1].fileDate
+            }
+            let count = indices.count
+            return PhotoGridSection(
+                id: "\(granularity)-\(date.timeIntervalSince1970)",
+                title: titleFormatter.string(from: date),
+                subtitle: mode == .day ? "\(weekdayFormatter.string(from: date)) · \(count) 张" : "\(count) 张",
+                photoIndices: indices
+            )
+        }
+        return cached
+    }
 }
 
 private struct PhotoGroupHeader: View {
@@ -556,6 +762,8 @@ struct PhotoGridContent: View {
     @State private var cachedPhotoIds: Set<String> = []
     @State private var lastDragUpdateTime: CFAbsoluteTime = 0
     @State private var didDragSelect = false
+    @State private var watermarkSelection: WatermarkPhotoSelection?
+    @State private var groupCache = PhotoGroupCache()
 
     private let gridCoordinateSpace = "photo-grid-space"
 
@@ -582,14 +790,10 @@ struct PhotoGridContent: View {
     }
 
     private var photoGroups: [PhotoGridSection] {
-        switch groupingMode {
-        case .all:
-            return [PhotoGridSection(id: "all", title: "所有照片", subtitle: "\(store.filteredPhotos.count) 张", photos: store.filteredPhotos)]
-        case .month:
-            return makePhotoGroups(granularity: .month)
-        case .day:
-            return makePhotoGroups(granularity: .day)
-        }
+        groupCache.sections(photos: store.filteredPhotos,
+                            version: store.filteredPhotosVersion,
+                            mode: groupingMode,
+                            ascending: store.filterOptions.sortAscending)
     }
 
     var body: some View {
@@ -604,8 +808,8 @@ struct PhotoGridContent: View {
                         } else {
                             ForEach(photoGroups) { group in
                                 Section {
-                                    ForEach(group.photos) { photo in
-                                        photoCard(photo)
+                                    ForEach(group.photoIndices, id: \.self) { index in
+                                        photoCard(store.filteredPhotos[index])
                                     }
                                 } header: {
                                     PhotoGroupHeader(
@@ -672,6 +876,9 @@ struct PhotoGridContent: View {
                 proxy.scrollTo(selectedId, anchor: .center)
             }
         }
+        .sheet(item: $watermarkSelection) { selection in
+            WatermarkExportView(store: store, photos: selection.photos)
+        }
     }
 
     private func photoCard(_ photo: PhotoEntry) -> some View {
@@ -682,7 +889,36 @@ struct PhotoGridContent: View {
             isPrimary: store.selectedPhoto?.id == photo.id,
             isSelectMode: isSelectMode
         )
+        // Cards own click selection. Keeping this separate from the grid's drag gesture
+        // avoids coordinate-space hit-test failures that otherwise make a click a no-op.
+        .contentShape(Rectangle())
+        .onTapGesture {
+            resignTextInputFocus()
+            handleTap(photo: photo)
+        }
+        .overlay(alignment: .bottomTrailing) {
+            let count = store.versionCount(for: photo)
+            if !photo.isVersionCopy && count > 1 {
+                Button {
+                    store.toggleVersions(for: photo)
+                } label: {
+                    Label("\(count)", systemImage: "square.stack.3d.up")
+                        .font(.system(size: 9, weight: .bold))
+                        .padding(4)
+                        .foregroundStyle(.white)
+                        .background(.black.opacity(0.65), in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .help(store.expandedVersionSources.contains(photo.sourceID) ? "收起裁剪版本" : "展开裁剪版本")
+                .padding(4)
+            }
+        }
         .id(photo.id)
+        .contextMenu {
+            PhotoContextMenu(store: store, photo: photo) { photos in
+                watermarkSelection = WatermarkPhotoSelection(photos: photos)
+            }
+        }
         .onAppear {
             store.preloadThumbnails(around: photo, size: gridSize)
         }
@@ -696,52 +932,13 @@ struct PhotoGridContent: View {
         )
     }
 
-    private func makePhotoGroups(granularity: Calendar.Component) -> [PhotoGridSection] {
-        let calendar = Calendar.current
-        let grouped = Dictionary(grouping: store.filteredPhotos) { photo in
-            let components: Set<Calendar.Component> = granularity == .month ? [.year, .month] : [.year, .month, .day]
-            return calendar.date(from: calendar.dateComponents(components, from: photo.fileDate)) ?? photo.fileDate
-        }
-
-        let ascending = store.filterOptions.sortAscending
-        return grouped.keys.sorted(by: ascending ? (<) : (>)).map { date in
-            let photos = (grouped[date] ?? []).sorted {
-                ascending ? $0.fileDate < $1.fileDate : $0.fileDate > $1.fileDate
-            }
-            let title = groupTitle(for: date, granularity: granularity)
-            let subtitle = groupSubtitle(for: date, photos: photos, granularity: granularity)
-            return PhotoGridSection(
-                id: "\(granularity)-\(date.timeIntervalSince1970)",
-                title: title,
-                subtitle: subtitle,
-                photos: photos
-            )
-        }
-    }
-
-    private func groupTitle(for date: Date, granularity: Calendar.Component) -> String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "zh_CN")
-        formatter.dateFormat = granularity == .month ? "yyyy年M月" : "yyyy年M月d日"
-        return formatter.string(from: date)
-    }
-
-    private func groupSubtitle(for date: Date, photos: [PhotoEntry], granularity: Calendar.Component) -> String {
-        guard granularity == .day else { return "\(photos.count) 张" }
-
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "zh_CN")
-        formatter.dateFormat = "EEEE"
-        return "\(formatter.string(from: date)) · \(photos.count) 张"
-    }
-
     private func isGroupSelected(_ group: PhotoGridSection) -> Bool {
-        let ids = Set(group.photos.map(\.id))
+        let ids = Set(group.photoIndices.map { store.filteredPhotos[$0].id })
         return !ids.isEmpty && ids.isSubset(of: store.selectedPhotos)
     }
 
     private func toggleGroupSelection(_ group: PhotoGridSection) {
-        let ids = Set(group.photos.map(\.id))
+        let ids = Set(group.photoIndices.map { store.filteredPhotos[$0].id })
         guard !ids.isEmpty else { return }
 
         if ids.isSubset(of: store.selectedPhotos) {
@@ -756,22 +953,15 @@ struct PhotoGridContent: View {
         }
     }
 
-    /// 命中反查：点击落点对应的照片
-    private func handleTap(at point: CGPoint) {
-        guard let id = frameStore.frames.first(where: { $0.value.contains(point) })?.key,
-              let photo = store.filteredPhotos.first(where: { $0.id == id }) else { return }
-        handleTap(photo: photo)
-    }
-
-    /// 统一的网格交互手势：同一个手势同时处理「点击选中」与「拖拽框选」，
-    /// 从根本上避免与卡片点击竞争。位移超过阈值判定为框选，否则松手时按点击处理。
+    /// 网格只负责拖拽框选。单击由卡片自身处理，避免依赖帧缓存做坐标反查。
     private var gridInteractionGesture: some Gesture {
-        DragGesture(minimumDistance: 0, coordinateSpace: .named(gridCoordinateSpace))
+        DragGesture(minimumDistance: 6, coordinateSpace: .named(gridCoordinateSpace))
             .onChanged { value in
                 if !didDragSelect {
                     let dx = value.location.x - value.startLocation.x
                     let dy = value.location.y - value.startLocation.y
                     guard dx * dx + dy * dy >= 36 else { return }
+                    resignTextInputFocus()
                     didDragSelect = true
                     dragStart = value.startLocation
                     dragBaselineSelection = store.selectedPhotos
@@ -781,14 +971,12 @@ struct PhotoGridContent: View {
                 dragCurrent = value.location
                 updateDragSelection()
             }
-            .onEnded { value in
+            .onEnded { _ in
                 if didDragSelect {
                     updateDragSelection(force: true)
                     if store.selectedCount > 0, !store.isSelectMode {
                         store.enterSelectMode()
                     }
-                } else {
-                    handleTap(at: value.startLocation)
                 }
                 dragStart = nil
                 dragCurrent = nil
@@ -796,6 +984,12 @@ struct PhotoGridContent: View {
                 dragBaselineSelection = []
                 dragSelectionMode = .replace
             }
+    }
+
+    @MainActor
+    private func resignTextInputFocus() {
+        guard KeyboardShortcutHandler.isTextFieldFocused else { return }
+        NSApp.keyWindow?.makeFirstResponder(nil)
     }
 
     private var currentDragSelectionMode: DragSelectionMode {

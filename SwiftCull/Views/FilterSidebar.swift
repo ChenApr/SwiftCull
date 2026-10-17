@@ -2,6 +2,7 @@ import SwiftUI
 
 struct FilterSidebar: View {
     @EnvironmentObject var store: PhotoStore
+    @State private var showingWatermarkExport = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -17,18 +18,16 @@ struct FilterSidebar: View {
                 .padding(.horizontal, 12)
                 .padding(.top, 12)
                 .padding(.bottom, 16)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
 
             exportSection
                 .padding(.horizontal, 12)
                 .padding(.bottom, 12)
         }
-        .alert("导出结果", isPresented: .constant(store.exportMessage != nil)) {
-            Button("好的") {
-                store.exportMessage = nil
-            }
-        } message: {
-            Text(store.exportMessage ?? "")
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .sheet(isPresented: $showingWatermarkExport) {
+            WatermarkExportView(store: store)
         }
     }
 
@@ -245,7 +244,7 @@ struct FilterSidebar: View {
     // MARK: - 日期输入
 
     private var dateInputRow: some View {
-        HStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: 6) {
             VStack(alignment: .leading, spacing: 2) {
                 Text("开始")
                     .font(.system(size: 9))
@@ -266,11 +265,6 @@ struct FilterSidebar: View {
                     )
                 )
             }
-
-            Text("至")
-                .font(.system(size: 10))
-                .foregroundStyle(.tertiary)
-                .padding(.top, 10)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text("结束")
@@ -303,7 +297,7 @@ struct FilterSidebar: View {
             Text("最近使用")
                 .font(.system(size: 9))
                 .foregroundStyle(.tertiary)
-            HStack(spacing: 4) {
+            FlowLayout(spacing: 4) {
                 ForEach(recentDateRanges.prefix(3), id: \.self) { range in
                     Button {
                         store.filterOptions.startDate = range.start
@@ -370,7 +364,7 @@ struct FilterSidebar: View {
             VStack(alignment: .leading, spacing: 10) {
                 SectionHeader(icon: "arrow.up.arrow.down", title: "排序")
 
-                HStack(spacing: 6) {
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 6) {
                     ForEach(SortOption.allCases) { option in
                         SortChip(
                             title: option.displayName,
@@ -443,6 +437,10 @@ struct FilterSidebar: View {
             VStack(alignment: .leading, spacing: 10) {
                 SectionHeader(icon: "square.and.arrow.up", title: "导出")
 
+                Text("范围：当前筛选结果（全部）")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+
                 VStack(spacing: 6) {
                     HStack(spacing: 6) {
                         Text("\(store.photoCount) 张照片")
@@ -490,6 +488,15 @@ struct FilterSidebar: View {
                     .buttonStyle(.plain)
                     .disabled(store.isExporting || store.photoCount == 0)
                     .animation(.smooth(duration: 0.2), value: store.isExporting)
+
+                    Button {
+                        showingWatermarkExport = true
+                    } label: {
+                        Label("全部筛选照片加水印并导出…", systemImage: "photo.badge.plus")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(store.isExporting || !store.filteredPhotos.contains(where: { $0.hasJpg || $0.hasNef }))
                 }
             }
         }

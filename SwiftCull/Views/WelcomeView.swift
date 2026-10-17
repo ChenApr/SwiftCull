@@ -13,10 +13,20 @@ struct WelcomeView: View {
                 Text("SwiftCull")
                     .font(.title.weight(.bold))
 
-                if store.errorMessage != nil {
-                    Text(store.errorMessage!)
+                if let errorMessage = store.errorMessage {
+                    Text(errorMessage)
                         .font(.subheadline)
                         .foregroundStyle(.orange)
+                        .multilineTextAlignment(.center)
+                } else if !store.sourcePath.isEmpty && store.photos.isEmpty {
+                    Text("未找到可识别的照片")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    Text(store.sourcePath)
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(2)
+                        .truncationMode(.middle)
                         .multilineTextAlignment(.center)
                 } else {
                     Text("打开一个包含照片的文件夹开始浏览")
@@ -28,7 +38,8 @@ struct WelcomeView: View {
             Button {
                 store.selectPath()
             } label: {
-                Label("打开文件夹", systemImage: "folder.badge.plus")
+                Label(store.sourcePath.isEmpty ? "打开文件夹" : "选择其他文件夹",
+                      systemImage: "folder.badge.plus")
                     .font(.title3.weight(.semibold))
                     .frame(maxWidth: 280)
             }
@@ -91,10 +102,15 @@ struct ShortcutGuideView: View {
     @Environment(\.dismiss) private var dismiss
 
     private let shortcuts: [(String, String)] = [
-        ("↑ ↓ ← →", "按网格位置选择照片"),
+        ("↑ ↓ ← →", "普通浏览：按网格位置选择照片"),
         ("拖拽框选", "鼠标框选多张照片"),
-        ("Space", "Quick Look 预览"),
+        ("Space", "普通浏览：Quick Look 预览；播放模式：播放 / 暂停"),
+        ("V", "进入 / 退出当前照片的视频播放模式"),
+        ("P", "实况照片编辑器：预览 / 停止当前选取片段"),
+        ("← →", "播放模式：前后跳转 5 秒；Shift + 左右逐帧"),
+        ("↑ ↓", "播放模式：调节音量"),
         ("E", "网格 / 大图切换"),
+        ("C", "裁剪单张照片 / 编辑当前版本"),
         ("Q", "完成并退出多选"),
         ("双指捏合", "缩放网格缩略图"),
         ("大图缩放", "捏合 / 双击 / ＋ － 缩放，拖拽平移"),
@@ -104,7 +120,8 @@ struct ShortcutGuideView: View {
         ("Delete", "删除所选照片"),
         ("A", "全选当前筛选结果"),
         ("Esc", "退出多选 / 取消输入焦点"),
-        ("⌘O", "打开文件夹")
+        ("⌘O", "打开文件夹"),
+        ("⌘C", "复制所选版本；裁剪后的照片可在 Finder 中粘贴")
     ]
 
     var body: some View {
@@ -163,7 +180,10 @@ struct ToolbarInfoView: View {
 }
 
 struct PhotoSinglePreviewView: View {
+    @EnvironmentObject var store: PhotoStore
     let photo: PhotoEntry
+
+    @State private var watermarkSelection: WatermarkPhotoSelection?
 
     @State private var scale: CGFloat = 1
     @State private var steadyScale: CGFloat = 1
@@ -174,29 +194,63 @@ struct PhotoSinglePreviewView: View {
     private let minScale: CGFloat = 1
     private let maxScale: CGFloat = 6
 
+    /// Only request a sharper decode when zoom crosses a useful resolution tier.
+    /// Pinching should not start a new image read for every fractional scale value.
+    private var previewResolutionScale: CGFloat {
+        if scale > 4 { return 6 }
+        if scale > 2 { return 4 }
+        if scale > 1 { return 2 }
+        return 1
+    }
+
     var body: some View {
         ZStack {
             background
 
-            GeometryReader { geo in
-                DetailThumbnailView(photo: photo, targetSize: 1800)
-                    .scaleEffect(scale)
-                    .offset(offset)
-                    .frame(width: geo.size.width, height: geo.size.height)
-                    .contentShape(Rectangle())
-                    .gesture(magnifyGesture(in: geo.size))
-                    .simultaneousGesture(panGesture(in: geo.size))
-                    .onTapGesture(count: 2) { toggleZoom() }
-                    .onTapGesture(count: 1) { resignFocus() }
-                    .onAppear { containerSize = geo.size }
-                    .onChange(of: geo.size) { _, newValue in containerSize = newValue }
+            if store.isVideoPlaybackMode, photo.movPath != nil {
+                VideoPlaybackView(controller: store.videoPlaybackController,
+                                  displayName: photo.displayName,
+                                  onLivePhoto: { store.openLivePhotoEditor(for: photo) },
+                                  onExit: { store.exitVideoPlaybackMode() })
+            } else {
+                GeometryReader { geo in
+                    DetailThumbnailView(photo: photo,
+                                        // Keep the previous 1800pt baseline for
+                                        // cropped previews, then request more as
+                                        // the viewport or zoom level requires.
+                                        targetSize: max(1800,
+                                                        max(geo.size.width, geo.size.height) * previewResolutionScale))
+                        .scaleEffect(scale)
+                        .offset(offset)
+                        .frame(width: geo.size.width, height: geo.size.height)
+                        .contentShape(Rectangle())
+                        .gesture(magnifyGesture(in: geo.size))
+                        .simultaneousGesture(panGesture(in: geo.size))
+                        .onTapGesture(count: 2) { toggleZoom() }
+                        .onTapGesture(count: 1) { resignFocus() }
+                        .onAppear { containerSize = geo.size }
+                        .onChange(of: geo.size) { _, newValue in containerSize = newValue }
+                }
+                .padding(.horizontal, 24)
+                .padding(.vertical, 20)
+                .clipped()
             }
-            .padding(.horizontal, 24)
-            .padding(.vertical, 20)
-            .clipped()
         }
-        .overlay(alignment: .bottom) { infoBar }
-        .overlay(alignment: .topTrailing) { zoomControls }
+        .overlay(alignment: .bottom) {
+            if !store.isVideoPlaybackMode { infoBar }
+        }
+        .overlay(alignment: .topTrailing) {
+            if !store.isVideoPlaybackMode { zoomControls }
+        }
+        .contentShape(Rectangle())
+        .contextMenu {
+            PhotoContextMenu(store: store, photo: photo, useSelection: false) { photos in
+                watermarkSelection = WatermarkPhotoSelection(photos: photos)
+            }
+        }
+        .sheet(item: $watermarkSelection) { selection in
+            WatermarkExportView(store: store, photos: selection.photos)
+        }
         .safeAreaInset(edge: .top, spacing: 0) {
             VStack(spacing: 0) {
                 ShortcutHintBar()
@@ -245,6 +299,15 @@ struct PhotoSinglePreviewView: View {
 
     private var zoomControls: some View {
         HStack(spacing: 4) {
+            if photo.movPath != nil {
+                Button { store.toggleVideoPlaybackMode(for: photo) } label: {
+                    Image(systemName: store.isVideoPlaybackMode && store.selectedPhoto?.id == photo.id
+                          ? "stop.circle" : "play.rectangle")
+                }
+                .help(store.isVideoPlaybackMode && store.selectedPhoto?.id == photo.id
+                      ? "退出播放 (V)" : "播放视频 (V)")
+                Divider().frame(height: 16)
+            }
             Button {
                 zoomBy(1 / 1.5)
             } label: {
@@ -267,6 +330,14 @@ struct PhotoSinglePreviewView: View {
                 Image(systemName: "plus.magnifyingglass")
             }
             .disabled(scale >= maxScale)
+
+            if !photo.hasMov {
+                Divider().frame(height: 16)
+                Button { store.editCrop(photo) } label: {
+                    Image(systemName: "crop.rotate")
+                }
+                .help("裁剪 / 编辑版本 (C)")
+            }
         }
         .font(.system(size: 13, weight: .medium))
         .buttonStyle(.plain)

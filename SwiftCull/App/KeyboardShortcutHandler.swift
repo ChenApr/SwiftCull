@@ -15,7 +15,7 @@ enum KeyboardShortcutHandler {
             let chars = event.charactersIgnoringModifiers?.lowercased()
 
             let consumed = MainActor.assumeIsolated {
-                handleKey(keyCode: keyCode, hasCommandModifier: hasCommandModifier, chars: chars, store: store)
+                handleKey(keyCode: keyCode, flags: flags, hasCommandModifier: hasCommandModifier, chars: chars, store: store)
             }
             return consumed ? nil : event
         }
@@ -23,7 +23,8 @@ enum KeyboardShortcutHandler {
 
     /// 返回 true 表示事件被消费（吞掉），false 表示放行
     @MainActor
-    private static func handleKey(keyCode: UInt16, hasCommandModifier: Bool, chars: String?, store: PhotoStore) -> Bool {
+    private static func handleKey(keyCode: UInt16, flags: NSEvent.ModifierFlags,
+                                  hasCommandModifier: Bool, chars: String?, store: PhotoStore) -> Bool {
         if isQuickLookVisible {
             if keyCode == 49 {
                 QuickLookHelper.shared.closePanel()
@@ -32,16 +33,56 @@ enum KeyboardShortcutHandler {
             return false
         }
 
+        // Let sheets and dialogs own their keys, including the crop editor's Space+drag gesture.
+        if NSApp.modalWindow != nil || NSApp.keyWindow?.isSheet == true ||
+           NSApp.keyWindow?.attachedSheet != nil {
+            return false
+        }
+
+        if keyCode == 8, flags.contains(.command),
+           !flags.contains(.control), !flags.contains(.option), !flags.contains(.shift),
+           !isTextFieldFocused, NSApp.modalWindow == nil,
+           NSApp.keyWindow?.isSheet != true, NSApp.keyWindow?.attachedSheet == nil {
+            return store.copyOriginalFiles()
+        }
+
+        if chars == "v", !hasCommandModifier, !isTextFieldFocused,
+           !flags.contains(.shift), !flags.contains(.function) {
+            return store.toggleVideoPlaybackMode()
+        }
+
+        if store.isVideoPlaybackMode {
+            guard !hasCommandModifier, !isTextFieldFocused else { return false }
+            switch keyCode {
+            case 49: // Space
+                store.videoPlaybackController.togglePlayPause()
+                return true
+            case 123, 124: // Left / Right
+                let direction = keyCode == 123 ? -1 : 1
+                if flags.contains(.shift) {
+                    store.videoPlaybackController.stepFrame(by: direction)
+                } else {
+                    store.videoPlaybackController.seek(by: Double(direction * 5))
+                }
+                return true
+            case 125, 126: // Down / Up
+                let direction: Float = keyCode == 126 ? 0.1 : -0.1
+                store.videoPlaybackController.adjustVolume(by: direction)
+                return true
+            case 53: // Escape
+                store.exitVideoPlaybackMode()
+                return true
+            default:
+                break
+            }
+        }
+
         switch keyCode {
         case 49: // Space
-            guard !hasCommandModifier else { return false }
+            guard !hasCommandModifier, NSApp.keyWindow?.isSheet != true,
+                  NSApp.keyWindow?.attachedSheet == nil else { return false }
             if let photo = store.selectedPhoto {
-                let path = photo.primaryImagePath
-                if !path.isEmpty {
-                    QuickLookHelper.shared.preview(URL(fileURLWithPath: path))
-                } else if let movPath = photo.movPath {
-                    QuickLookHelper.shared.preview(URL(fileURLWithPath: movPath))
-                }
+                store.previewPhoto(photo)
                 return true
             }
         case 125: // Down
@@ -115,6 +156,9 @@ enum KeyboardShortcutHandler {
             case "e":
                 store.toggleSinglePreview()
                 return true
+            case "c":
+                guard flags.isDisjoint(with: [.shift, .function]) else { return false }
+                return store.editSelectedCrop()
             case "q":
                 if store.isSelectMode {
                     store.confirmSelectMode()

@@ -1,0 +1,412 @@
+import AppKit
+import ImageIO
+
+@main
+struct WatermarkServiceSmoke {
+    static func main() async throws {
+        precondition(WatermarkPreset.landscapePresets.count == 7)
+        precondition(WatermarkPreset.portraitPresets.count == 8)
+        precondition(WatermarkPreset.allCases.count == 15)
+        precondition(WatermarkPreset.standard.resolved(isPortrait: true, matchOrientation: true) == .standardPortrait)
+        precondition(WatermarkPreset.standardPortrait.resolved(isPortrait: false, matchOrientation: true) == .standard)
+        precondition(WatermarkPreset.nikonPortrait.resolved(isPortrait: false, matchOrientation: true) == .nikonPortrait)
+        precondition(WatermarkFont.bundled.count == 18)
+        precondition(WatermarkFont.local.count == 5)
+        precondition(WatermarkFont.bundled.allSatisfy(WatermarkFont.isAvailable),
+                     "A bundled watermark font could not be loaded")
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        for (width, height) in [(1200, 800), (800, 1200)] {
+            let input = directory.appendingPathComponent("source-\(width)x\(height).jpg")
+            let bitmap = NSBitmapImageRep(
+                bitmapDataPlanes: nil, pixelsWide: width, pixelsHigh: height,
+                bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
+            )!
+            let context = NSGraphicsContext(bitmapImageRep: bitmap)!
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = context
+            NSColor.systemRed.setFill()
+            CGRect(x: 0, y: height / 2, width: width, height: height / 2).fill()
+            NSColor.systemBlue.setFill()
+            CGRect(x: 0, y: 0, width: width, height: height / 2).fill()
+            context.flushGraphics()
+            NSGraphicsContext.restoreGraphicsState()
+            let original = bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.95])!
+            try original.write(to: input)
+
+            let photo = PhotoEntry(
+                baseName: "source", jpgPath: input.path, nefPath: nil, movPath: nil,
+                jpgFileSize: Int64(original.count), nefFileSize: nil, movFileSize: nil,
+                fileDate: Date(), modificationDate: Date()
+            )
+            var croppedPhoto = photo
+            croppedPhoto.cropRect = CropRect(x: 0.25, y: 0, width: 0.5, height: 1)
+            let croppedOverlay = try WatermarkService.render(photo: croppedPhoto, preset: .cornerParameters)
+            precondition(croppedOverlay.pixelsWide == width / 2 && croppedOverlay.pixelsHigh == height,
+                         "Watermark overlay ignored crop")
+            let automaticCrop = try WatermarkService.render(photo: croppedPhoto, preset: .standard,
+                                                            matchOrientation: true)
+            let chosenPreset: WatermarkPreset = height > width / 2 ? .standardPortrait : .standard
+            let expectedCrop = try WatermarkService.render(photo: croppedPhoto, preset: chosenPreset)
+            precondition(automaticCrop.tiffRepresentation == expectedCrop.tiffRepresentation,
+                         "Watermark orientation did not follow crop")
+            let roundtripDirectory = directory.appendingPathComponent("roundtrip-\(width)x\(height)")
+            if width > height {
+                let nikonInput = directory.appendingPathComponent("synthetic-nikon.jpg")
+                guard let destination = CGImageDestinationCreateWithURL(
+                    nikonInput as CFURL, "public.jpeg" as CFString, 1, nil
+                ), let image = bitmap.cgImage else { fatalError("Cannot create EXIF fixture") }
+                CGImageDestinationAddImage(destination, image, [
+                    kCGImagePropertyTIFFDictionary: [
+                        kCGImagePropertyTIFFMake: "NIKON CORPORATION",
+                        kCGImagePropertyTIFFModel: "NIKON Z50_2"
+                    ]
+                ] as CFDictionary)
+                precondition(CGImageDestinationFinalize(destination))
+                let branded = try WatermarkService.render(photo: photo, preset: .standard,
+                                                          sourcePath: nikonInput.path)
+                let hasYellowLogo = stride(from: 0, to: branded.pixelsWide, by: 4).contains { x in
+                    stride(from: 0, to: branded.pixelsHigh, by: 4).contains { y in
+                        guard let color = branded.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { return false }
+                        return color.redComponent > 0.9 && color.greenComponent > 0.6
+                            && color.blueComponent < 0.3
+                    }
+                }
+                precondition(hasYellowLogo, "Bundled Nikon logo was not rendered")
+                for preset in [WatermarkPreset.standard, .nikonPortrait, .centerBrand] {
+                    let builtIn = try WatermarkService.render(photo: photo, preset: preset,
+                                                              sourcePath: nikonInput.path)
+                    let editor = try WatermarkCustomRenderer.render(
+                        photo: photo, configuration: .draft(from: preset), sourcePath: nikonInput.path)
+                    precondition(editor.tiffRepresentation == builtIn.tiffRepresentation,
+                                 "Nikon editor rendering differs from \(preset.rawValue)")
+                }
+                var uploaded = WatermarkConfiguration.draft(from: .centerBrand)
+                precondition(uploaded.components.count == 1 && uploaded.components[0].kind == .logo)
+                uploaded.components[0].imageData = bitmap.representation(using: .png, properties: [:])
+                let changed = try WatermarkCustomRenderer.render(photo: photo, configuration: uploaded,
+                                                                 sourcePath: nikonInput.path)
+                let originalBrand = try WatermarkService.render(photo: photo, preset: .centerBrand,
+                                                                sourcePath: nikonInput.path)
+                precondition(changed.tiffRepresentation != originalBrand.tiffRepresentation,
+                             "Uploaded Logo was not rendered")
+                let encoded = try JSONEncoder().encode(uploaded)
+                let decoded = try JSONDecoder().decode(WatermarkConfiguration.self, from: encoded)
+                precondition(decoded.components[0].imageData == uploaded.components[0].imageData,
+                             "Uploaded Logo was not persisted")
+            }
+            for preset in WatermarkPreset.allCases {
+                let image = try WatermarkService.render(photo: photo, preset: preset)
+                let draft = WatermarkConfiguration.draft(from: preset)
+                let editorImage = try WatermarkCustomRenderer.render(photo: photo, configuration: draft)
+                precondition(editorImage.pixelsWide == image.pixelsWide && editorImage.pixelsHigh == image.pixelsHigh,
+                             "Editor canvas differs from \(preset.rawValue)")
+                precondition(editorImage.tiffRepresentation == image.tiffRepresentation,
+                             "Initial editor rendering differs from \(preset.rawValue)")
+                let preview = try WatermarkService.previewData(photo: photo, preset: preset)
+                let exported = try WatermarkService.jpegData(photo: photo, preset: preset)
+                let exportedSource = CGImageSourceCreateWithData(exported as CFData, nil)!
+                let exportedImage = CGImageSourceCreateImageAtIndex(exportedSource, 0, nil)!
+                precondition(!preview.isEmpty && exportedImage.width == image.pixelsWide)
+                precondition(exportedImage.height == image.pixelsHigh)
+                if [.cornerParameters, .folderAndDate].contains(preset.layout) {
+                    precondition(image.pixelsHigh == height)
+                } else {
+                    precondition(image.pixelsHigh > height)
+                }
+                if [.blur, .nikonBlur].contains(preset.layout) {
+                    precondition(image.pixelsWide == Int(Double(width) * 1.35))
+                }
+                var matchedDraft = draft
+                matchedDraft.matchOrientation = true
+                let saved = try await MainActor.run {
+                    let store = WatermarkPresetStore(directory: roundtripDirectory)
+                    try store.save(matchedDraft)
+                    return WatermarkPresetStore(directory: roundtripDirectory)
+                        .configurations.first { $0.id == matchedDraft.id }!
+                }
+                let builtInPreview = try WatermarkService.previewData(photo: photo, preset: preset,
+                                                                       matchOrientation: true)
+                let savedPreview = try WatermarkService.previewData(photo: photo,
+                                                                     configuration: saved)
+                precondition(savedPreview == builtInPreview,
+                             "Saved preview differs from \(preset.rawValue)")
+                let editingPreset = preset.resolved(isPortrait: height > width, matchOrientation: true)
+                let reopenedDraft = saved.adapted(to: editingPreset)
+                let reopenedPreview = try WatermarkService.previewData(photo: photo,
+                                                                        configuration: reopenedDraft)
+                precondition(reopenedPreview == builtInPreview,
+                             "Reopened editor preview differs from \(preset.rawValue)")
+                let savedAgain = try await MainActor.run {
+                    let store = WatermarkPresetStore(directory: roundtripDirectory)
+                    try store.save(reopenedDraft)
+                    return WatermarkPresetStore(directory: roundtripDirectory)
+                        .configurations.first { $0.id == reopenedDraft.id }!
+                }
+                let resavedPreview = try WatermarkService.previewData(photo: photo,
+                                                                       configuration: savedAgain)
+                precondition(resavedPreview == builtInPreview,
+                             "Resaved preview differs from \(preset.rawValue)")
+                let builtInExport = try WatermarkService.jpegData(photo: photo, preset: preset,
+                                                                   matchOrientation: true)
+                let savedExport = try WatermarkService.jpegData(photo: photo, configuration: savedAgain)
+                precondition(savedExport == builtInExport,
+                             "Saved export differs from \(preset.rawValue)")
+                if preset == .standard {
+                    let output = try WatermarkService.export(photo: photo, configuration: savedAgain,
+                                                             sourcePath: input.path, to: roundtripDirectory)
+                    let outputData = try Data(contentsOf: output)
+                    precondition(outputData == builtInExport,
+                                 "Saved preset export file differs from the built-in preset")
+                }
+            }
+            let automatic = try WatermarkService.render(photo: photo, preset: .standard,
+                                                         matchOrientation: true)
+            let expected = try WatermarkService.render(photo: photo,
+                                                        preset: height > width ? .standardPortrait : .standard)
+            precondition(automatic.pixelsWide == expected.pixelsWide)
+            precondition(automatic.pixelsHigh == expected.pixelsHigh)
+            let outputDirectory = directory.appendingPathComponent("exports-\(width)x\(height)")
+            try FileManager.default.createDirectory(at: outputDirectory, withIntermediateDirectories: true)
+            let first = try WatermarkService.export(photo: photo, preset: .standard,
+                                                     sourcePath: input.path, matchOrientation: true,
+                                                     to: outputDirectory)
+            let firstData = try Data(contentsOf: first)
+            let second = try WatermarkService.export(photo: photo, preset: .standard,
+                                                      sourcePath: input.path, matchOrientation: true,
+                                                      to: outputDirectory)
+            let firstDataAfterSecondExport = try Data(contentsOf: first)
+            let secondData = try Data(contentsOf: second)
+            precondition(first.lastPathComponent == "source-\(width)x\(height)_watermark.jpg")
+            precondition(second.lastPathComponent == "source-\(width)x\(height)_watermark_2.jpg")
+            precondition(!firstData.isEmpty && !secondData.isEmpty)
+            precondition(firstData == firstDataAfterSecondExport, "Existing export changed")
+            let unchanged = try Data(contentsOf: input)
+            precondition(unchanged == original, "Source image changed")
+
+            var custom = WatermarkConfiguration.draft(from: .standard)
+            custom.name = "测试布局"
+            custom.background = .blurred
+            custom.components.append(WatermarkComponent(kind: .customText, position: .topCenter,
+                                                         text: "SwiftCull 光影留痕", colorHex: "#FFFFFF", bold: true))
+            let customImage = try WatermarkCustomRenderer.render(photo: photo, configuration: custom)
+            let customPreview = try WatermarkService.previewData(photo: photo, configuration: custom)
+            let preparedPreview = try WatermarkCustomRenderer.prepare(photo: photo, maxPixelSize: 1200)
+            let cachedTemplate = try WatermarkCustomRenderer.render(prepared: preparedPreview,
+                                                                    configuration: custom)
+            let uncachedTemplate = try WatermarkCustomRenderer.render(photo: photo, configuration: custom,
+                                                                      maxPixelSize: 1200)
+            precondition(cachedTemplate.tiffRepresentation == uncachedTemplate.tiffRepresentation,
+                         "Cached template preview differs from the original renderer")
+            precondition(customImage.pixelsWide == width && customImage.pixelsHigh > height)
+            precondition(!customPreview.isEmpty)
+            custom.components[custom.components.count - 1].fontID = "lxgw-wenkai"
+            let styledPreview = try WatermarkService.previewData(photo: photo, configuration: custom)
+            let cachedFont = try WatermarkCustomRenderer.render(prepared: preparedPreview,
+                                                                configuration: custom)
+            let uncachedFont = try WatermarkCustomRenderer.render(photo: photo, configuration: custom,
+                                                                  maxPixelSize: 1200)
+            precondition(cachedFont.tiffRepresentation == uncachedFont.tiffRepresentation,
+                         "Cached font preview differs from the original renderer")
+            var freeform = custom
+            freeform.templateLayout = false
+            let cachedFreeform = try WatermarkCustomRenderer.render(prepared: preparedPreview,
+                                                                    configuration: freeform)
+            let uncachedFreeform = try WatermarkCustomRenderer.render(photo: photo,
+                                                                      configuration: freeform,
+                                                                      maxPixelSize: 1200)
+            precondition(cachedFreeform.tiffRepresentation == uncachedFreeform.tiffRepresentation,
+                         "Cached freeform preview differs from the original renderer")
+            precondition(styledPreview != customPreview, "Changing the font did not update the preview")
+            let styledRoundtrip = try JSONDecoder().decode(WatermarkConfiguration.self,
+                                                          from: JSONEncoder().encode(custom))
+            precondition(styledRoundtrip.components.last?.fontID == "lxgw-wenkai")
+            let savedStyledExport = try WatermarkService.jpegData(photo: photo, configuration: styledRoundtrip)
+            let currentStyledExport = try WatermarkService.jpegData(photo: photo, configuration: custom)
+            precondition(savedStyledExport == currentStyledExport,
+                         "Saved font rendered differently on export")
+            var templateFont = WatermarkConfiguration.draft(from: .standard)
+            templateFont.components[0].fontID = "merriweather"
+            precondition(templateFont.adapted(to: .standardPortrait).components[0].fontID == "merriweather",
+                         "Orientation matching lost the selected font")
+            if width > height, let previewPath = ProcessInfo.processInfo.environment["SWIFTCULL_SMOKE_PREVIEW"] {
+                try styledPreview.write(to: URL(fileURLWithPath: previewPath))
+            }
+            let customExport = try WatermarkService.export(photo: photo, configuration: custom,
+                                                            sourcePath: input.path, to: outputDirectory)
+            precondition(FileManager.default.fileExists(atPath: customExport.path))
+
+            if width > height {
+                var first = WatermarkReviewItem(photo: photo, sourcePath: input.path)
+                first.choice = .builtIn(.blur)
+                var second = WatermarkReviewItem(photo: photo, sourcePath: input.path)
+                second.include = false
+                second.choice = .custom(custom.id)
+                var requests = try WatermarkReviewPlan.requests(from: [first, second],
+                                                                 configurations: [custom])
+                precondition(requests.count == 1)
+                guard case .preset(.blur) = requests[0].style else {
+                    fatalError("Per-photo preset was lost")
+                }
+                second.include = true
+                second.matchOrientation = false
+                requests = try WatermarkReviewPlan.requests(from: [first, second],
+                                                            configurations: [custom])
+                precondition(requests.count == 2 && !requests[1].matchOrientation)
+                guard case .custom(let saved) = requests[1].style, saved.id == custom.id else {
+                    fatalError("Per-photo custom preset was lost")
+                }
+                second.choice = .custom(UUID())
+                precondition((try? WatermarkReviewPlan.requests(from: [first, second],
+                                                                configurations: [custom])) == nil,
+                             "Deleted custom preset should block export")
+
+                let signature = WatermarkConfiguration(
+                    name: "签名", basePreset: .cornerParameters,
+                    components: [WatermarkComponent(kind: .customText, position: .topCenter,
+                                                    text: "SIGNATURE", fontPercent: 8,
+                                                    colorHex: "#00FFFF", bold: true)],
+                    templateLayout: false
+                )
+                var yellowSignature = signature
+                yellowSignature.id = UUID()
+                yellowSignature.components[0].colorHex = "#FFFF00"
+                var layeredItem = WatermarkReviewItem(photo: photo, sourcePath: input.path)
+                let plainRequest = try WatermarkReviewPlan.request(for: layeredItem, configurations: [])
+                let prepared = try WatermarkCustomRenderer.prepare(photo: photo, sourcePath: input.path,
+                                                                    maxPixelSize: 1200)
+                let plain = try WatermarkService.render(prepared: prepared, request: plainRequest)
+                let legacy = try WatermarkService.render(photo: photo, preset: .standard,
+                                                         sourcePath: input.path, matchOrientation: true,
+                                                         maxPixelSize: 1200)
+                precondition(plain.tiffRepresentation == legacy.tiffRepresentation,
+                             "A single-layer preset changed its output")
+
+                layeredItem.overlays = [WatermarkOverlayChoice(choice: .custom(signature.id))]
+                var layeredRequest = try WatermarkReviewPlan.request(for: layeredItem,
+                                                                       configurations: [signature, yellowSignature])
+                let layered = try WatermarkService.render(prepared: prepared, request: layeredRequest)
+                precondition(layered.pixelsWide == plain.pixelsWide && layered.pixelsHigh == plain.pixelsHigh,
+                             "An overlay changed the base canvas")
+                precondition(layered.tiffRepresentation != plain.tiffRepresentation,
+                             "The signature layer did not render")
+                let cyanVisible = stride(from: 0, to: layered.pixelsWide, by: 2).contains { x in
+                    stride(from: 0, to: layered.pixelsHigh, by: 2).contains { y in
+                        guard let color = layered.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else {
+                            return false
+                        }
+                        return color.redComponent < 0.4 && color.greenComponent > 0.75
+                            && color.blueComponent > 0.75
+                    }
+                }
+                precondition(cyanVisible, "The signature was not visible on the finished image")
+
+                layeredItem.overlays.append(WatermarkOverlayChoice(choice: .custom(yellowSignature.id)))
+                layeredRequest = try WatermarkReviewPlan.request(for: layeredItem,
+                                                                  configurations: [signature, yellowSignature])
+                precondition(layeredRequest.overlays.count == 2)
+                let cyanThenYellow = try WatermarkService.render(prepared: prepared, request: layeredRequest)
+                layeredItem.overlays.swapAt(0, 1)
+                let reverseRequest = try WatermarkReviewPlan.request(for: layeredItem,
+                                                                      configurations: [signature, yellowSignature])
+                let yellowThenCyan = try WatermarkService.render(prepared: prepared, request: reverseRequest)
+                let cachedBase = try WatermarkService.renderBase(prepared: prepared,
+                                                                  style: reverseRequest.style,
+                                                                  matchOrientation: reverseRequest.matchOrientation)
+                let cachedLayers = try WatermarkService.render(prepared: prepared, base: cachedBase,
+                                                                overlays: reverseRequest.overlays)
+                precondition(cachedLayers.tiffRepresentation == yellowThenCyan.tiffRepresentation,
+                             "Cached base rendering changed the layered result")
+                precondition(cyanThenYellow.tiffRepresentation != yellowThenCyan.tiffRepresentation,
+                             "Changing layer order did not change the result")
+                let preview = try WatermarkService.previewData(request: reverseRequest, prepared: prepared)
+                let cachedPreview = try WatermarkService.previewData(prepared: prepared, base: cachedBase,
+                                                                     overlays: reverseRequest.overlays)
+                precondition(preview == cachedPreview, "Cached preview differs from export rendering")
+                let expectedPreview = yellowThenCyan.representation(using: .jpeg,
+                                                                     properties: [.compressionFactor: 0.8])
+                precondition(preview == expectedPreview, "Preview used a different layer order")
+                let exported = try WatermarkService.export(request: reverseRequest, to: outputDirectory)
+                let exportedData = try Data(contentsOf: exported)
+                let expectedExport = try WatermarkService.jpegData(request: reverseRequest)
+                precondition(exportedData == expectedExport,
+                             "Export used a different layer stack")
+                layeredItem.overlays[0].choice = .custom(UUID())
+                precondition((try? WatermarkReviewPlan.request(for: layeredItem,
+                                                                configurations: [signature, yellowSignature])) == nil,
+                             "A deleted overlay preset should block export")
+            }
+        }
+        let presetsDirectory = directory.appendingPathComponent("saved-presets")
+        try await MainActor.run {
+            let store = WatermarkPresetStore(directory: presetsDirectory)
+            var config = WatermarkConfiguration.draft(from: .standard)
+            config.name = "保存的预设"
+            try store.save(config)
+            precondition(store.configurations == [config])
+            let reopened = WatermarkPresetStore(directory: presetsDirectory)
+            precondition(reopened.configurations == [config])
+            config.components.append(WatermarkComponent(kind: .customText, position: .footerCenter,
+                                                         text: "新组件"))
+            try reopened.save(config)
+            precondition(reopened.configurations.first?.components.count == 6)
+            try reopened.delete(config.id)
+            precondition(reopened.configurations.isEmpty)
+        }
+        let old = WatermarkConfiguration(name: "旧预设", basePreset: .standard, components: [])
+        let oldData = try JSONEncoder().encode(old)
+        let decodedOld = try JSONDecoder().decode(WatermarkConfiguration.self, from: oldData)
+        precondition(decodedOld.templateLayout == nil && decodedOld.components.isEmpty,
+                     "Existing custom presets must remain readable")
+        if let path = ProcessInfo.processInfo.environment["SWIFTCULL_SEMI_SAMPLE"] {
+            let sample = PhotoEntry(baseName: "sample", jpgPath: path, nefPath: nil, movPath: nil,
+                                    jpgFileSize: 0, nefFileSize: nil, movFileSize: nil,
+                                    fileDate: Date(), modificationDate: Date())
+            for preset in WatermarkPreset.allCases {
+                let builtIn = try SemiWatermarkRenderer.render(photo: sample, preset: preset,
+                                                               sourcePath: path, matchOrientation: false,
+                                                               maxPixelSize: 1200)
+                let editing = try WatermarkCustomRenderer.render(photo: sample,
+                                                                  configuration: .draft(from: preset),
+                                                                  sourcePath: path, maxPixelSize: 1200)
+                precondition(editing.tiffRepresentation == builtIn.tiffRepresentation,
+                             "Real photo editor rendering differs from \(preset.rawValue)")
+                var draft = WatermarkConfiguration.draft(from: preset)
+                draft.matchOrientation = true
+                let saved = try await MainActor.run {
+                    let store = WatermarkPresetStore(directory: directory.appendingPathComponent("real-sample-presets"))
+                    try store.save(draft)
+                    return WatermarkPresetStore(directory: store.directory)
+                        .configurations.first { $0.id == draft.id }!
+                }
+                let builtInPreview = try WatermarkService.previewData(photo: sample, preset: preset,
+                                                                       sourcePath: path, matchOrientation: true)
+                let savedPreview = try WatermarkService.previewData(photo: sample,
+                                                                     configuration: saved, sourcePath: path)
+                precondition(savedPreview == builtInPreview,
+                             "Real photo saved preview differs from \(preset.rawValue)")
+            }
+            if let output = ProcessInfo.processInfo.environment["SWIFTCULL_LAYER_PREVIEW"] {
+                let signature = WatermarkConfiguration(
+                    name: "签名", basePreset: .cornerParameters,
+                    components: [WatermarkComponent(kind: .customText, position: .topCenter,
+                                                    text: "SwiftCull", fontPercent: 5,
+                                                    colorHex: "#FFFFFF", fontID: "dancing-script")],
+                    templateLayout: false
+                )
+                var item = WatermarkReviewItem(photo: sample, sourcePath: path)
+                item.overlays = [WatermarkOverlayChoice(choice: .custom(signature.id)),
+                                 WatermarkOverlayChoice(choice: .builtIn(.cornerParameters))]
+                let request = try WatermarkReviewPlan.request(for: item, configurations: [signature])
+                let prepared = try WatermarkCustomRenderer.prepare(photo: sample, sourcePath: path,
+                                                                    maxPixelSize: 1200)
+                try WatermarkService.previewData(request: request, prepared: prepared)
+                    .write(to: URL(fileURLWithPath: output))
+            }
+        }
+        print("Watermark smoke test passed: 15 presets × landscape/portrait, layered preview/export, custom layout, persistence")
+    }
+}

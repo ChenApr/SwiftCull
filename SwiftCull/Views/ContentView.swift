@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 struct ContentView: View {
     @EnvironmentObject var store: PhotoStore
@@ -6,28 +7,26 @@ struct ContentView: View {
     @State private var showInspector = false
     @State private var availableWidth: CGFloat = 1200
 
-    private let sidebarBreakpoint: CGFloat = 900
-    private let inspectorBreakpoint: CGFloat = 700
+    private let sidebarBreakpoint: CGFloat = 1120
+    private let inspectorBreakpoint: CGFloat = 800
 
     var body: some View {
-        NavigationSplitView(columnVisibility: $sidebarVisibility) {
-            FilterSidebar()
-                .navigationSplitViewColumnWidth(min: 230, ideal: 260, max: 300)
-        } detail: {
-            mainContent
-                .inspector(isPresented: $showInspector) {
-                    inspectorPanel
-                        .inspectorColumnWidth(min: 320, ideal: 380, max: 460)
-                }
-                .toolbar { toolbarContent }
-        }
-        .navigationSplitViewStyle(.balanced)
-        .background {
-            GeometryReader { geo in
-                Color.clear
-                    .onAppear { adapt(to: geo.size.width) }
-                    .onChange(of: geo.size.width) { _, newWidth in adapt(to: newWidth) }
+        GeometryReader { geometry in
+            NavigationSplitView(columnVisibility: $sidebarVisibility) {
+                FilterSidebar()
+                    .navigationSplitViewColumnWidth(min: 230, ideal: 260, max: 300)
+            } detail: {
+                mainContent
+                    .inspector(isPresented: $showInspector) {
+                        inspectorPanel
+                            .inspectorColumnWidth(min: 320, ideal: 360, max: 460)
+                    }
+                    .toolbar { toolbarContent }
             }
+            .navigationSplitViewStyle(.balanced)
+            .frame(width: geometry.size.width, height: geometry.size.height)
+            .onAppear { adapt(to: geometry.size.width) }
+            .onChange(of: geometry.size.width) { _, width in adapt(to: width) }
         }
         .alert("确认删除", isPresented: $store.showingDeleteConfirmation) {
             Button("取消", role: .cancel) {
@@ -38,17 +37,48 @@ struct ContentView: View {
             }
         } message: {
             if store.photosToDelete.count == 1 {
-                Text("将此照片（所有格式文件）移至废纸篓？此操作可通过废纸篓恢复。")
+                let hasVersions = store.photosToDelete.first.map { store.versionCount(for: $0) > 1 } ?? false
+                Text(hasVersions
+                     ? "将此照片的所有格式文件移至废纸篓？裁剪记录将保留，恢复原文件并刷新后可继续编辑。"
+                     : "将此照片（所有格式文件）移至废纸篓？此操作可通过废纸篓恢复。")
             } else {
                 Text("将 \(store.photosToDelete.count) 张照片（所有格式文件）移至废纸篓？此操作可通过废纸篓恢复。")
             }
         }
+        .alert("操作结果", isPresented: Binding(
+            get: { store.exportMessage != nil },
+            set: { if !$0 { store.exportMessage = nil } }
+        )) {
+            Button("好的") { store.exportMessage = nil }
+        } message: {
+            Text(store.exportMessage ?? "")
+        }
         .sheet(isPresented: $store.showingShortcutGuide) {
             ShortcutGuideView()
+        }
+        .sheet(item: $store.cropEditorPhoto) { photo in
+            PhotoCropEditorView(photo: photo).environmentObject(store)
+        }
+        .sheet(item: $store.livePhotoEditorPhoto) { photo in
+            LivePhotoExportView(photo: photo, initialTime: store.livePhotoInitialTime)
+        }
+        .overlay(alignment: .top) {
+            if let status = store.copyStatus {
+                Text(status)
+                    .font(.caption.weight(.semibold))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 9)
+                    .background(.regularMaterial, in: Capsule())
+                    .padding(.top, 8)
+                    .allowsHitTesting(false)
+            }
         }
         .task {
             store.detectVolumes()
             await store.loadPhotos()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
+            store.flushPendingWrites()
         }
         .onChange(of: store.selectedPhoto?.id) { _, newId in
             if newId == nil {
@@ -59,6 +89,11 @@ struct ContentView: View {
         }
         .onChange(of: store.isSidebarVisible) { _, isVisible in
             sidebarVisibility = isVisible ? .all : .detailOnly
+        }
+        .onChange(of: sidebarVisibility) { _, visibility in
+            if visibility == .all, availableWidth < sidebarBreakpoint {
+                showInspector = false
+            }
         }
     }
 
@@ -87,6 +122,9 @@ struct ContentView: View {
             }
 
             Button {
+                if !showInspector, availableWidth < sidebarBreakpoint {
+                    sidebarVisibility = .detailOnly
+                }
                 showInspector.toggle()
             } label: {
                 Label(showInspector ? "隐藏详情" : "显示详情", systemImage: "sidebar.right")
@@ -103,7 +141,7 @@ struct ContentView: View {
             PhotoDetailView(showsPreview: store.viewMode == .grid)
                 .safeAreaInset(edge: .top, spacing: 0) {
                     HStack {
-                        Label("照片详情", systemImage: "info.circle")
+                        Label("当前照片详情", systemImage: "info.circle")
                             .font(.system(size: 12, weight: .semibold))
                             .foregroundStyle(.secondary)
                         Spacer()
@@ -135,7 +173,7 @@ struct ContentView: View {
 
     private func adapt(to width: CGFloat) {
         availableWidth = width
-        // 渐进式收起：先收左侧栏(<900)，窗口更窄(<700)再收右侧详情
+        // Keep the grid usable as the window narrows: hide filters before the inspector.
         let targetSidebar: NavigationSplitViewVisibility = width >= sidebarBreakpoint ? .all : .detailOnly
         if sidebarVisibility != targetSidebar {
             sidebarVisibility = targetSidebar

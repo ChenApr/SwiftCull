@@ -61,15 +61,10 @@ struct ShortcutHintBar: View {
                 .foregroundStyle(store.isSelectMode ? Color.accentColor : .secondary)
                 .labelStyle(.titleAndIcon)
 
-            ForEach(hints) { hint in
-                HStack(spacing: 4) {
-                    ForEach(Array(hint.keys.enumerated()), id: \.offset) { _, key in
-                        KeycapView(label: key)
-                    }
-                    Text(hint.label)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
+            ViewThatFits(in: .horizontal) {
+                hintRow(hints)
+                hintRow(Array(hints.prefix(2)))
+                hintRow(Array(hints.prefix(1)))
             }
 
             Spacer(minLength: 0)
@@ -80,7 +75,25 @@ struct ShortcutHintBar: View {
         .background(.bar)
     }
 
+    private func hintRow(_ items: [ShortcutHintItem]) -> some View {
+        HStack(spacing: 14) {
+            ForEach(items) { hint in
+                HStack(spacing: 4) {
+                    ForEach(Array(hint.keys.enumerated()), id: \.offset) { _, key in
+                        KeycapView(label: key)
+                    }
+                    Text(hint.label)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+        }
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
     private var contextTitle: String {
+        if store.isVideoPlaybackMode { return "视频播放" }
         if store.viewMode == .single { return "大图浏览" }
         if store.isSelectMode { return "批量操作" }
         if store.selectedPhoto != nil { return "浏览" }
@@ -88,6 +101,7 @@ struct ShortcutHintBar: View {
     }
 
     private var contextIcon: String {
+        if store.isVideoPlaybackMode { return "play.rectangle.fill" }
         if store.viewMode == .single { return "photo.fill" }
         if store.isSelectMode { return "checkmark.circle.fill" }
         if store.selectedPhoto != nil { return "hand.point.up.left.fill" }
@@ -95,27 +109,54 @@ struct ShortcutHintBar: View {
     }
 
     private var hints: [ShortcutHintItem] {
-        if store.viewMode == .single {
+        if store.isVideoPlaybackMode {
             return [
+                ShortcutHintItem(keys: ["V", "Esc"], label: "退出视频"),
+                ShortcutHintItem(keys: ["Space"], label: "播放 / 暂停"),
+                ShortcutHintItem(keys: ["←", "→"], label: "跳转 5 秒"),
+                ShortcutHintItem(keys: ["⇧", "←", "→"], label: "逐帧"),
+                ShortcutHintItem(keys: ["↑", "↓"], label: "音量")
+            ]
+        }
+        if store.viewMode == .single {
+            var items = [
                 ShortcutHintItem(keys: ["E"], label: "退出大图浏览"),
                 ShortcutHintItem(keys: ["Space"], label: "快速预览"),
                 ShortcutHintItem(keys: ["←", "→"], label: "上一张 / 下一张")
             ]
+            if store.canEditSelectedCrop {
+                items.insert(ShortcutHintItem(keys: ["C"], label: "裁剪"), at: 1)
+            }
+            if store.canPlaySelectedVideo {
+                items.insert(ShortcutHintItem(keys: ["V"], label: "播放视频"), at: 1)
+            }
+            return items
         }
         if store.isSelectMode {
-            return [
+            var items = [
                 ShortcutHintItem(keys: ["Q"], label: "完成并退出"),
                 ShortcutHintItem(keys: ["Esc"], label: "取消"),
                 ShortcutHintItem(keys: ["1–5"], label: "评分"),
                 ShortcutHintItem(keys: ["⌫"], label: "删除")
             ]
+            if store.canEditSelectedCrop {
+                items.insert(ShortcutHintItem(keys: ["C"], label: "裁剪"), at: 2)
+            }
+            return items
         } else if store.selectedPhoto != nil {
-            return [
+            var items = [
                 ShortcutHintItem(keys: ["E"], label: "大图浏览"),
                 ShortcutHintItem(keys: ["Space"], label: "快速预览"),
                 ShortcutHintItem(keys: ["↑", "↓", "←", "→"], label: "切换"),
                 ShortcutHintItem(keys: ["拖拽"], label: "框选多张")
             ]
+            if store.canEditSelectedCrop {
+                items.insert(ShortcutHintItem(keys: ["C"], label: "裁剪"), at: 1)
+            }
+            if store.canPlaySelectedVideo {
+                items.insert(ShortcutHintItem(keys: ["V"], label: "播放视频"), at: 1)
+            }
+            return items
         } else {
             return [
                 ShortcutHintItem(keys: ["拖拽"], label: "框选多张"),

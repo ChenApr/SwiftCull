@@ -27,8 +27,8 @@ jobs:
       - name: Show Xcode version
         run: xcodebuild -version
 
-      - name: Install XcodeGen
-        run: brew install xcodegen
+      - name: Install build and test tools
+        run: brew install xcodegen ffmpeg
 
       - name: Generate Xcode project
         run: xcodegen generate
@@ -44,6 +44,22 @@ jobs:
             CODE_SIGN_IDENTITY="-" \
             CODE_SIGN_STYLE=Automatic \
             build
+
+      - name: Watermark rendering smoke test
+        run: bash Tests/run-watermark-smoke.sh
+
+      - name: Photo actions and crop regression tests
+        run: |
+          bash Tests/run-photo-action-scope-smoke.sh
+          bash Tests/run-crop-smoke.sh
+
+      - name: Thumbnail and data integrity regression tests
+        run: |
+          bash Tests/run-thumbnail-pipeline-smoke.sh
+          bash Tests/run-data-integrity-smoke.sh
+
+      - name: Live Photo smoke test
+        run: bash Tests/run-live-photo-smoke.sh
 
       - name: Package DMG
         run: |
