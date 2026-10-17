@@ -36,10 +36,14 @@ struct PhotoGridView: View {
     @AppStorage("photoGroupingMode") private var groupingMode: PhotoGroupingMode = .all
     @State private var lastSelectedPhoto: PhotoEntry?
     @State private var baseGridSize: Double?
+    @State private var selectedWatermarkSelection: WatermarkPhotoSelection?
     private let minGridSize: Double = 80
     private let maxGridSize: Double = 220
 
     private var isSelectMode: Bool { store.isSelectMode }
+    private var watermarkableSelectedPhotos: [PhotoEntry] {
+        store.selectedPhotoEntries.filter { $0.hasJpg || $0.hasNef }
+    }
 
     private var columns: [GridItem] {
         [GridItem(.adaptive(minimum: CGFloat(gridSize), maximum: CGFloat(gridSize) + 50), spacing: 4)]
@@ -91,6 +95,9 @@ struct PhotoGridView: View {
         .animation(.snappy(duration: 0.24), value: store.isSelectMode)
         .animation(.snappy(duration: 0.2), value: store.selectedCount)
         .animation(.snappy(duration: 0.24), value: store.isEnriching)
+        .sheet(item: $selectedWatermarkSelection) { selection in
+            WatermarkExportView(store: store, photos: selection.photos)
+        }
     }
 
     @ViewBuilder
@@ -191,9 +198,13 @@ struct PhotoGridView: View {
     }
 
     private var selectionCommandPanel: some View {
-        ViewThatFits(in: .horizontal) {
-            regularSelectionPanel
-            denseSelectionPanel
+        VStack(alignment: .leading, spacing: 7) {
+            ViewThatFits(in: .horizontal) {
+                regularSelectionPanel
+                denseSelectionPanel
+                compactSelectionPanel
+            }
+            selectionExportActions
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
@@ -211,6 +222,49 @@ struct PhotoGridView: View {
                 .strokeBorder(Color.primary.opacity(0.09), lineWidth: 0.7)
         }
         .frame(maxWidth: .infinity, alignment: .center)
+    }
+
+    private var selectionExportActions: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) {
+                Text("仅对已选 \(store.selectedCount) 张")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 4)
+                Button {
+                    store.exportSelectedPhotos()
+                } label: {
+                    Label("导出所选照片…", systemImage: "square.and.arrow.up")
+                }
+                .disabled(store.selectedCount == 0 || store.isExporting)
+                Button {
+                    selectedWatermarkSelection = WatermarkPhotoSelection(photos: watermarkableSelectedPhotos)
+                } label: {
+                    Label("所选 \(watermarkableSelectedPhotos.count) 张加水印并导出…", systemImage: "photo.badge.plus")
+                }
+                .disabled(store.isExporting || watermarkableSelectedPhotos.isEmpty)
+            }
+
+            HStack {
+                Text("仅对已选 \(store.selectedCount) 张")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Menu {
+                    Button("导出所选照片…") { store.exportSelectedPhotos() }
+                        .disabled(store.selectedCount == 0 || store.isExporting)
+                    Button("所选 \(watermarkableSelectedPhotos.count) 张加水印并导出…") {
+                        selectedWatermarkSelection = WatermarkPhotoSelection(photos: watermarkableSelectedPhotos)
+                    }
+                    .disabled(store.isExporting || watermarkableSelectedPhotos.isEmpty)
+                } label: {
+                    Label("导出所选…", systemImage: "square.and.arrow.up")
+                }
+            }
+        }
+        .font(.caption)
+        .buttonStyle(.bordered)
+        .controlSize(.small)
     }
 
     private var regularSelectionPanel: some View {
@@ -239,6 +293,36 @@ struct PhotoGridView: View {
             Spacer(minLength: 6)
             deleteSection
         }
+    }
+
+    private var compactSelectionPanel: some View {
+        HStack(spacing: 7) {
+            compactSelectionCommitSection
+            Menu {
+                Button("清除评分") { store.batchClearRating() }
+                ForEach(1...5, id: \.self) { rating in
+                    Button("\(rating) 星") { store.batchSetRating(rating) }
+                }
+            } label: {
+                Label("评分", systemImage: "star")
+            }
+            .disabled(store.selectedCount == 0)
+            Menu {
+                ForEach(store.availableTags) { tag in
+                    Button(tag.displayName) { store.batchAddTag(tag.name) }
+                }
+                Divider()
+                Button("清除标签") { store.batchClearTags() }
+            } label: {
+                Label("标签", systemImage: "tag")
+            }
+            .disabled(store.selectedCount == 0)
+            Spacer(minLength: 0)
+            deleteSection
+        }
+        .font(.caption)
+        .menuStyle(.button)
+        .controlSize(.small)
     }
 
     private var selectionCommitSection: some View {
@@ -556,6 +640,7 @@ struct PhotoGridContent: View {
     @State private var cachedPhotoIds: Set<String> = []
     @State private var lastDragUpdateTime: CFAbsoluteTime = 0
     @State private var didDragSelect = false
+    @State private var watermarkSelection: WatermarkPhotoSelection?
 
     private let gridCoordinateSpace = "photo-grid-space"
 
@@ -672,6 +757,9 @@ struct PhotoGridContent: View {
                 proxy.scrollTo(selectedId, anchor: .center)
             }
         }
+        .sheet(item: $watermarkSelection) { selection in
+            WatermarkExportView(store: store, photos: selection.photos)
+        }
     }
 
     private func photoCard(_ photo: PhotoEntry) -> some View {
@@ -683,6 +771,11 @@ struct PhotoGridContent: View {
             isSelectMode: isSelectMode
         )
         .id(photo.id)
+        .contextMenu {
+            PhotoContextMenu(store: store, photo: photo) { photos in
+                watermarkSelection = WatermarkPhotoSelection(photos: photos)
+            }
+        }
         .onAppear {
             store.preloadThumbnails(around: photo, size: gridSize)
         }
