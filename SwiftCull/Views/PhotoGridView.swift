@@ -73,6 +73,7 @@ struct PhotoGridView: View {
 
             if store.isSelectMode {
                 selectionCommandPanel
+                    .animation(.snappy(duration: 0.2), value: store.selectedCount)
                     .padding(.horizontal, 22)
                     .padding(.vertical, 8)
                     .background(.bar)
@@ -93,7 +94,6 @@ struct PhotoGridView: View {
                 .simultaneousGesture(magnifyGesture)
         }
         .animation(.snappy(duration: 0.24), value: store.isSelectMode)
-        .animation(.snappy(duration: 0.2), value: store.selectedCount)
         .animation(.snappy(duration: 0.24), value: store.isEnriching)
         .sheet(item: $selectedWatermarkSelection) { selection in
             WatermarkExportView(store: store, photos: selection.photos)

@@ -115,7 +115,7 @@ struct PhotoDetailView: View {
             Rectangle()
                 .fill(.black.opacity(0.04))
                 .overlay {
-                    DetailThumbnailView(photo: photo)
+                    InspectorThumbnailView(photo: photo)
                         .padding(.vertical, 5)
                 }
                 .frame(height: 220)
@@ -173,7 +173,8 @@ struct PhotoDetailView: View {
 
     @ViewBuilder
     private func versionSection(_ photo: PhotoEntry) -> some View {
-        let versions = store.versions(for: photo)
+        // Ordinary photos need no full-library scan on each inspector update.
+        let versions = store.versionCount(for: photo) > 1 ? store.versions(for: photo) : []
         if versions.count > 1 || photo.cropRect != nil {
             DetailCard(title: "裁剪版本", systemImage: "square.stack.3d.up") {
                 VStack(alignment: .leading, spacing: 8) {

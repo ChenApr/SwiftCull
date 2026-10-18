@@ -103,6 +103,48 @@ struct AsyncThumbnailView: View {
     }
 }
 
+/// A bounded, cached preview for the inspector. Full-size viewing keeps its
+/// independent decode path below so zooming is not limited by this thumbnail.
+struct InspectorThumbnailView: View {
+    let photo: PhotoEntry
+    @State private var image: NSImage?
+    @State private var loadedKey: String?
+
+    private var cacheKey: String { ThumbnailService.inspectorCacheKey(for: photo) }
+
+    var body: some View {
+        Group {
+            if let image, loadedKey == cacheKey {
+                Image(nsImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+            } else {
+                Color(nsColor: .windowBackgroundColor)
+                    .overlay { ProgressView().controlSize(.small) }
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .task(id: cacheKey) {
+            let requestKey = cacheKey
+            let service = ThumbnailService.shared
+            let loaded: NSImage?
+            if let cached = service.getCached(requestKey) {
+                loaded = cached
+            } else {
+                loaded = await service.inspectorThumbnail(for: photo)
+            }
+            guard !Task.isCancelled, requestKey == cacheKey else { return }
+            // Image arrival must not inherit the grid/inspector layout animation.
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                image = loaded
+                loadedKey = requestKey
+            }
+        }
+    }
+}
+
 struct DetailThumbnailView: View {
     let photo: PhotoEntry
     var targetSize: CGFloat = 1000

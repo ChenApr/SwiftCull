@@ -7,6 +7,17 @@ import ImageIO
 final class ThumbnailService: @unchecked Sendable {
     static let shared = ThumbnailService()
 
+    // The inspector is at most 460pt wide; 960 pixels cover a Retina display.
+    static let inspectorPixelSize = 960
+
+    static func inspectorCacheKey(for photo: PhotoEntry) -> String {
+        "inspector-v1|\(photo.primaryFilePath)|\(photo.modificationDate.timeIntervalSince1970)|\(String(describing: photo.cropRect))"
+    }
+
+    private enum RenderMode {
+        case grid, inspector
+    }
+
     /// Every caller, including preheating, uses the same key for the same rendered image.
     static func cacheKey(path: String, size: CGFloat, crop: CropRect? = nil) -> String {
         "\(path)|\(quantizedSize(size))|\(String(describing: crop))"
@@ -85,6 +96,17 @@ final class ThumbnailService: @unchecked Sendable {
     }
 
     func thumbnail(path: String, id: String, size: CGFloat, crop: CropRect? = nil) async -> NSImage? {
+        await thumbnail(path: path, id: id, size: size, crop: crop, mode: .grid)
+    }
+
+    func inspectorThumbnail(for photo: PhotoEntry) async -> NSImage? {
+        await thumbnail(path: photo.primaryFilePath, id: Self.inspectorCacheKey(for: photo),
+                        size: CGFloat(Self.inspectorPixelSize) / 2, crop: photo.cropRect, mode: .inspector)
+    }
+
+    private func thumbnail(path: String, id: String, size: CGFloat, crop: CropRect?,
+                           mode: RenderMode) async -> NSImage? {
+        guard !Task.isCancelled, !path.isEmpty else { return nil }
         if let cached = getCached(id) {
             return cached
         }
@@ -93,7 +115,7 @@ final class ThumbnailService: @unchecked Sendable {
         return await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
                 waiter.setCompletion { image in continuation.resume(returning: image) }
-                enqueue(path: path, id: id, size: size, crop: crop, waiter: waiter, preheat: false)
+                enqueue(path: path, id: id, size: size, crop: crop, waiter: waiter, preheat: false, mode: mode)
             }
         } onCancel: {
             waiter.resolve(nil)
@@ -108,7 +130,7 @@ final class ThumbnailService: @unchecked Sendable {
     }
 
     private func enqueue(path: String, id: String, size: CGFloat, crop: CropRect?, waiter: Waiter,
-                         preheat: Bool) {
+                         preheat: Bool, mode: RenderMode = .grid) {
         guard waiter.isActive else { return }
         if let cached = getCached(id) {
             waiter.resolve(cached)
@@ -139,7 +161,8 @@ final class ThumbnailService: @unchecked Sendable {
         let generationForRequest = requestGeneration
         let queue = preheat ? preheatQueue : workQueue
         queue.async { [weak self] in
-            self?.produceThumbnail(path: path, id: id, size: size, crop: crop, generation: generationForRequest)
+            self?.produceThumbnail(path: path, id: id, size: size, crop: crop,
+                                   generation: generationForRequest, mode: mode)
         }
     }
 
@@ -216,7 +239,7 @@ final class ThumbnailService: @unchecked Sendable {
     }
 
     private func produceThumbnail(path: String, id: String, size: CGFloat, crop: CropRect?,
-                                  generation requestGeneration: Int) {
+                                  generation requestGeneration: Int, mode: RenderMode) {
         guard begin(id: id, generation: requestGeneration) else { return }
         generationSemaphore.wait()
         defer { generationSemaphore.signal() }
@@ -237,9 +260,15 @@ final class ThumbnailService: @unchecked Sendable {
         // Cropped renders may have been written by an earlier build as JPEGs.
         // Never read those files back: decode the source crop again so a lossy
         // cache entry cannot become the visible or exported image.
-        var image = crop == nil ? loadFromDiskCache(id: id) : nil
+        var image = mode == .grid && crop == nil ? loadFromDiskCache(id: id) : nil
         if image == nil {
-            if let crop {
+            if mode == .inspector {
+                image = autoreleasepool {
+                    videoExtensions.contains(ext)
+                        ? Self.createVideoThumbnail(path: path, maxSize: size)
+                        : Self.createInspectorThumbnail(path: path, crop: crop)
+                }
+            } else if let crop {
                 // ImageIO's limit applies before cropping. Account for a small crop's
                 // fraction of the source so the final card still has enough pixels.
                 let fraction = max(0.001, min(crop.normalized.width, crop.normalized.height))
@@ -260,7 +289,7 @@ final class ThumbnailService: @unchecked Sendable {
             // not persist them as JPEGs: that introduces an avoidable lossy
             // round trip for a render that may be used for export or preview.
             // Uncropped grid thumbnails retain the bounded disk cache.
-            shouldPersist = image != nil && crop == nil
+            shouldPersist = image != nil && crop == nil && mode == .grid
         }
 
         if let image, isCurrentGeneration(requestGeneration), hasActiveWaiters(id: id, generation: requestGeneration) {
@@ -367,6 +396,35 @@ final class ThumbnailService: @unchecked Sendable {
             return representation.pixelsWide * representation.pixelsHigh * 4
         }
         return Int(image.size.width * image.size.height * 4)
+    }
+
+    /// Decode only enough source pixels for the visible crop, then draw into a
+    /// compact buffer so CGImage.cropping cannot retain a large source bitmap.
+    private static func createInspectorThumbnail(path: String, crop: CropRect?) -> NSImage? {
+        guard let dimensions = try? CropImageService.orientedDimensions(path: path) else { return nil }
+        let sourceEdge = Double(max(dimensions.width, dimensions.height))
+        let normalized = crop?.normalized
+        let cropWidth: Double = normalized?.width ?? 1
+        let cropHeight: Double = normalized?.height ?? 1
+        let visibleWidth = Double(dimensions.width) * cropWidth
+        let visibleHeight = Double(dimensions.height) * cropHeight
+        let visibleEdge = max(visibleWidth, visibleHeight)
+        guard visibleEdge > 0 else { return nil }
+        let decodeSize = Int(min(sourceEdge, (Double(inspectorPixelSize) * sourceEdge / visibleEdge).rounded(.up)))
+        guard let decoded = try? CropImageService.image(path: path, crop: crop, maxPixelSize: decodeSize) else {
+            return nil
+        }
+        let scale = min(1, Double(inspectorPixelSize) / Double(max(decoded.width, decoded.height)))
+        let width = max(1, Int((Double(decoded.width) * scale).rounded(.down)))
+        let height = max(1, Int((Double(decoded.height) * scale).rounded(.down)))
+        let colorSpace = decoded.colorSpace.flatMap { $0.model == .rgb ? $0 : nil } ?? CGColorSpaceCreateDeviceRGB()
+        guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
+                                      bytesPerRow: 0, space: colorSpace,
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        context.interpolationQuality = .high
+        context.draw(decoded, in: CGRect(x: 0, y: 0, width: width, height: height))
+        guard let image = context.makeImage() else { return nil }
+        return NSImage(cgImage: image, size: NSSize(width: width, height: height))
     }
 
     private static func createThumbnail(path: String, maxSize: CGFloat) -> NSImage? {
