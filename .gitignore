@@ -27,4 +27,6 @@ xcuserdata/
 
 # Project specific
 dark-avatar.jpg
-.claude/
+# Share Claude instructions; keep local settings and other state private.
+.claude/*
+!.claude/CLAUDE.md

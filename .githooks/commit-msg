@@ -1,0 +1,31 @@
+#!/bin/bash
+set -euo pipefail
+
+# Strip editor comments and normalize whitespace without changing the message file.
+# ASCII validation checks character usage, not English grammar or imperative mood.
+export LC_ALL=C
+git stripspace --strip-comments < "$1" | awk '
+function reject(reason) {
+    print "Invalid commit message: " reason > "/dev/stderr"
+    print "Expected: feat: add photo export\n\n- Describe an optional detail in English." > "/dev/stderr"
+    invalid = 1
+    exit 1
+}
+NR == 1 {
+    if ($0 !~ /^(feat|fix|perf|refactor|docs|style|test|chore|ci|revert): [A-Za-z][ -~]*$/)
+        reject("use an allowed prefix followed by an English description, e.g. docs: update README.")
+    next
+}
+NR == 2 {
+    if ($0 != "") reject("separate the title and body with a blank line.")
+    next
+}
+NF {
+    if ($0 !~ /^- [ -~]+$/ || $0 !~ /[A-Za-z]/)
+        reject("each body item must start with - and a space, and use ASCII English text.")
+}
+END {
+    if (invalid) exit 1
+    if (NR == 0) reject("the message is empty.")
+}
+'

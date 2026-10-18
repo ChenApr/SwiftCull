@@ -213,6 +213,10 @@ bash Tests/run-data-integrity-smoke.sh
 
 ## 反馈与贡献
 
+开发前请阅读 [协作规范](AGENTS.md)。[.agent/](.agent/README.md) 与 [.claude/](.claude/CLAUDE.md) 提供工具入口，统一引用同一份规范。
+
+首次克隆后运行 `bash .agent/setup-git-hooks.sh` 启用本地提交信息格式校验。
+
 欢迎通过 [Issues](https://github.com/SAN-SHIa/SwiftCull/issues) 反馈问题或提出建议，也欢迎提交 Pull Request。反馈问题时，请附上 macOS 版本、应用版本、文件格式和复现步骤；界面问题可附截图。
 
 ## 许可证
