@@ -63,7 +63,7 @@ class PhotoStore: ObservableObject {
     }
     @Published private(set) var isVideoPlaybackMode = false
     let videoPlaybackController = VideoPlaybackController()
-    @Published var isSidebarVisible = true
+    @Published var isSidebarVisible = false
     @Published var isInspectorVisible = false
     @Published var showingShortcutGuide = false
     @Published var isSelectMode = false
@@ -115,6 +115,7 @@ class PhotoStore: ObservableObject {
 
     private var gridColumnCount = 1
     private var currentLoadID = UUID()
+    private var displayedFolderPath: String?
     private var latestLoadRequestID = UUID()
     private var lastPreheatKey: String?
     private var preheatTask: Task<Void, Never>?
@@ -503,6 +504,8 @@ class PhotoStore: ObservableObject {
         }
 
         if folderPath.isEmpty {
+            isSidebarVisible = false
+            displayedFolderPath = nil
             photos = []
             filteredPhotos = []
             cachedTotalSize = ByteCountFormatter.string(fromByteCount: 0, countStyle: .file)
@@ -515,6 +518,7 @@ class PhotoStore: ObservableObject {
 
         var isDir: ObjCBool = false
         if !FileManager.default.fileExists(atPath: folderPath, isDirectory: &isDir) || !isDir.boolValue {
+            isSidebarVisible = false
             errorMessage = "路径不存在或不是文件夹: \(folderPath)"
             isLoading = false
             loadingProgress = 0
@@ -556,6 +560,15 @@ class PhotoStore: ObservableObject {
         }
 
         photos = initial
+        // Reveal filters when entering a photo folder, but preserve a manual
+        // sidebar toggle when refreshing the folder already being browsed.
+        if initial.isEmpty {
+            isSidebarVisible = false
+            displayedFolderPath = nil
+        } else {
+            if displayedFolderPath != folderPath { isSidebarVisible = true }
+            displayedFolderPath = folderPath
+        }
         filteredIndexById = [:]
         loadingProgress = 1
         loadingStatus = fast.isEmpty ? "未找到可识别的照片" : "加载完成"

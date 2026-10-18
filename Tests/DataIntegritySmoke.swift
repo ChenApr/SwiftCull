@@ -58,6 +58,9 @@ struct DataIntegritySmoke {
         try writeJPEG(b.appendingPathComponent("same.jpg"))
         defaults.set(5, forKey: "com.photofilter.rating.same")
         let store = PhotoStore(ratingService: ratings, projectMetadata: metadata)
+        precondition(!store.isSidebarVisible, "The welcome screen must start without the filter sidebar")
+        await store.loadPhotos()
+        precondition(!store.isSidebarVisible)
 
         // Folder drops use the same loader as the picker, without losing the current
         // folder when a file, URL, missing path, or multiple folders are dropped.
@@ -65,6 +68,10 @@ struct DataIntegritySmoke {
         let bImagePath = try fm.contentsOfDirectory(at: b, includingPropertiesForKeys: nil).first!.path
         precondition(store.openFolder(from: [a]))
         try await eventually { !store.isLoading && !store.isEnriching && store.photos.first?.jpgPath == aImagePath }
+        precondition(store.isSidebarVisible, "Opening a photo folder must reveal filters")
+        store.isSidebarVisible = false
+        await store.loadPhotos()
+        precondition(!store.isSidebarVisible, "Refresh must preserve a manually hidden sidebar")
         let package = root.appendingPathComponent("Example.app")
         try fm.createDirectory(at: package, withIntermediateDirectories: true)
         for urls in [[], [a, b], [a.appendingPathComponent("same.jpg")],
@@ -80,11 +87,13 @@ struct DataIntegritySmoke {
         let unicodeImagePath = try fm.contentsOfDirectory(at: unicodeFolder, includingPropertiesForKeys: nil).first!.path
         precondition(store.openFolder(from: [unicodeFolder]))
         try await eventually { !store.isLoading && !store.isEnriching && store.photos.first?.jpgPath == unicodeImagePath }
+        precondition(store.isSidebarVisible, "Switching photo folders must reveal filters")
         let emptyFolder = root.appendingPathComponent("Empty")
         try fm.createDirectory(at: emptyFolder, withIntermediateDirectories: true)
         precondition(store.openFolder(from: [emptyFolder]))
         try await eventually { !store.isLoading && !store.isEnriching && store.photos.isEmpty }
         precondition(store.errorMessage == nil)
+        precondition(!store.isSidebarVisible, "An empty folder must keep the welcome screen uncluttered")
         precondition(store.openFolder(from: [a]))
         precondition(store.openFolder(from: [b]))
         try await eventually { !store.isLoading && !store.isEnriching && store.photos.first?.jpgPath == bImagePath }

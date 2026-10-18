@@ -193,7 +193,8 @@ struct ContentView: View {
         availableWidth = width
         // Keep the grid usable as the window narrows: hide filters before the inspector.
         if crossedSidebarBreakpoint {
-            store.isSidebarVisible = width >= sidebarBreakpoint
+            store.isSidebarVisible = width >= sidebarBreakpoint && !store.sourcePath.isEmpty &&
+                !store.photos.isEmpty && store.errorMessage == nil && !store.isLoading
         }
         if width < inspectorBreakpoint, store.isInspectorVisible {
             store.isInspectorVisible = false
