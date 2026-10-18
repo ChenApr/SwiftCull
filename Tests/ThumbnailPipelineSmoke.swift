@@ -35,9 +35,11 @@ enum ThumbnailPipelineSmoke {
         service.preloadThumbnails(paths: [(path: source.path, crop: crop)], size: 128)
         let cropped = await service.thumbnail(path: source.path, id: cropKey, size: 128, crop: crop)
         precondition(cropped != nil && cropped!.size.width >= 200)
+        precondition(cropped!.size.width == cropped!.size.height, "Grid crops must match the visible center square")
         precondition(service.getCached(cropKey) != nil)
 
         try await checkInspectorPreviews(in: root, service: service)
+        try await checkPreheatWindows(in: root, source: source, service: service)
 
         // Cancelling all requests must release every continuation, including queued requests.
         let tasks = (0..<40).map { index in
@@ -48,7 +50,34 @@ enum ThumbnailPipelineSmoke {
         try? await Task.sleep(for: .milliseconds(10))
         service.cancelPending()
         for task in tasks { _ = await task.value }
-        print("Thumbnail pipeline smoke passed: shared keys, downsampling, crop cache, cancellation, inspector previews")
+        print("Thumbnail pipeline smoke passed: shared keys, downsampling, crop cache, cancellation, inspector previews, scrolling preheat windows")
+    }
+
+    private static func checkPreheatWindows(in root: URL, source: URL, service: ThumbnailService) async throws {
+        // Rapid scrolls alternate overlapping windows and distant jumps while
+        // visible cards request some of the same images. No waiter may be stranded.
+        service.clearInMemoryCache()
+        let paths = try (0..<96).map { index -> String in
+            let url = root.appendingPathComponent("scroll-\(index).jpg")
+            try FileManager.default.linkItem(at: source, to: url)
+            return url.path
+        }
+        var visible: [Task<NSImage?, Never>] = []
+        for start in [0, 8, 16, 48, 40, 32, 8, 0] {
+            let window = paths[start..<start + 32].map { (path: $0, crop: Optional<CropRect>.none) }
+            service.preloadThumbnails(paths: window, size: 128)
+            for path in paths[start..<start + 4] {
+                visible.append(Task {
+                    await service.thumbnail(path: path, id: ThumbnailService.cacheKey(path: path, size: 128), size: 128)
+                })
+            }
+            try await Task.sleep(for: .milliseconds(2))
+        }
+        for request in visible {
+            let result = await request.value
+            precondition(result != nil, "Moving the preheat window must not cancel visible requests")
+        }
+        service.preloadThumbnails(paths: [], size: 128)
     }
 
     private static func checkInspectorPreviews(in root: URL, service: ThumbnailService) async throws {
@@ -93,6 +122,13 @@ enum ThumbnailPipelineSmoke {
         precondition(cropped.bytesPerRow * cropped.height < 100_000)
         let pixel = NSBitmapImageRep(cgImage: cropped).colorAt(x: 0, y: 0)!.usingColorSpace(.deviceRGB)!
         precondition(pixel.blueComponent > 0.9 && pixel.redComponent < 0.1)
+
+        let gridKey = ThumbnailService.cacheKey(path: source.path, size: 128, crop: crop)
+        let gridCrop = try requireImage(await service.thumbnail(path: source.path, id: gridKey, size: 128, crop: crop))
+        precondition(gridCrop.width == gridCrop.height && gridCrop.width <= 384)
+        precondition(gridCrop.bytesPerRow * gridCrop.height <= 384 * 384 * 4)
+        let gridPixel = NSBitmapImageRep(cgImage: gridCrop).colorAt(x: 0, y: 0)!.usingColorSpace(.deviceRGB)!
+        precondition(gridPixel.blueComponent > 0.9 && gridPixel.redComponent < 0.1)
 
         // EXIF rotation precedes crop coordinates, just as it does in the full-size preview.
         let rotatedSource = root.appendingPathComponent("rotated.jpg")

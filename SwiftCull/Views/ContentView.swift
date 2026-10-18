@@ -3,8 +3,6 @@ import AppKit
 
 struct ContentView: View {
     @EnvironmentObject var store: PhotoStore
-    @State private var sidebarVisibility: NavigationSplitViewVisibility = .all
-    @State private var showInspector = false
     @State private var availableWidth: CGFloat = 1200
 
     private let sidebarBreakpoint: CGFloat = 1120
@@ -12,12 +10,15 @@ struct ContentView: View {
 
     var body: some View {
         GeometryReader { geometry in
-            NavigationSplitView(columnVisibility: $sidebarVisibility) {
+            NavigationSplitView(columnVisibility: Binding(
+                get: { store.isSidebarVisible ? .all : .detailOnly },
+                set: { store.isSidebarVisible = $0 != .detailOnly }
+            )) {
                 FilterSidebar()
                     .navigationSplitViewColumnWidth(min: 230, ideal: 260, max: 300)
             } detail: {
                 mainContent
-                    .inspector(isPresented: $showInspector) {
+                    .inspector(isPresented: $store.isInspectorVisible) {
                         inspectorPanel
                             .inspectorColumnWidth(min: 320, ideal: 360, max: 460)
                     }
@@ -82,17 +83,17 @@ struct ContentView: View {
         }
         .onChange(of: store.selectedPhoto?.id) { _, newId in
             if newId == nil {
-                showInspector = false
-            } else if !store.isSelectMode, availableWidth >= inspectorBreakpoint {
-                showInspector = true
+                store.isInspectorVisible = false
             }
         }
         .onChange(of: store.isSidebarVisible) { _, isVisible in
-            sidebarVisibility = isVisible ? .all : .detailOnly
+            if isVisible, availableWidth < sidebarBreakpoint {
+                store.isInspectorVisible = false
+            }
         }
-        .onChange(of: sidebarVisibility) { _, visibility in
-            if visibility == .all, availableWidth < sidebarBreakpoint {
-                showInspector = false
+        .onChange(of: store.isInspectorVisible) { _, isVisible in
+            if isVisible, availableWidth < sidebarBreakpoint {
+                store.isSidebarVisible = false
             }
         }
     }
@@ -121,15 +122,11 @@ struct ContentView: View {
                 }
             }
 
-            Button {
-                if !showInspector, availableWidth < sidebarBreakpoint {
-                    sidebarVisibility = .detailOnly
-                }
-                showInspector.toggle()
-            } label: {
-                Label(showInspector ? "隐藏详情" : "显示详情", systemImage: "sidebar.right")
+            Button(action: store.toggleInspector) {
+                Label(store.isInspectorVisible ? "隐藏详情" : "显示详情", systemImage: "sidebar.right")
             }
             .disabled(store.selectedPhoto == nil)
+            .help("显示或隐藏右栏 (⌘⇧B)")
 
             ToolbarInfoView()
         }
@@ -146,7 +143,7 @@ struct ContentView: View {
                             .foregroundStyle(.secondary)
                         Spacer()
                         Button {
-                            showInspector = false
+                            store.isInspectorVisible = false
                         } label: {
                             Image(systemName: "xmark.circle.fill")
                                 .font(.system(size: 16))
@@ -172,14 +169,14 @@ struct ContentView: View {
     }
 
     private func adapt(to width: CGFloat) {
+        let crossedSidebarBreakpoint = (width >= sidebarBreakpoint) != (availableWidth >= sidebarBreakpoint)
         availableWidth = width
         // Keep the grid usable as the window narrows: hide filters before the inspector.
-        let targetSidebar: NavigationSplitViewVisibility = width >= sidebarBreakpoint ? .all : .detailOnly
-        if sidebarVisibility != targetSidebar {
-            sidebarVisibility = targetSidebar
+        if crossedSidebarBreakpoint {
+            store.isSidebarVisible = width >= sidebarBreakpoint
         }
-        if width < inspectorBreakpoint, showInspector {
-            showInspector = false
+        if width < inspectorBreakpoint, store.isInspectorVisible {
+            store.isInspectorVisible = false
         }
     }
 
@@ -202,6 +199,25 @@ struct ContentView: View {
             PhotoSinglePreviewView(photo: photo)
         } else {
             PhotoGridView()
+        }
+    }
+}
+
+struct SidebarCommands: Commands {
+    @ObservedObject var store: PhotoStore
+
+    var body: some Commands {
+        CommandGroup(after: .sidebar) {
+            Button(store.isSidebarVisible ? "隐藏左栏" : "显示左栏") {
+                store.toggleSidebar()
+            }
+            .keyboardShortcut("b", modifiers: .command)
+
+            Button(store.isInspectorVisible ? "隐藏右栏" : "显示右栏") {
+                store.toggleInspector()
+            }
+            .keyboardShortcut("b", modifiers: [.command, .shift])
+            .disabled(store.selectedPhoto == nil)
         }
     }
 }

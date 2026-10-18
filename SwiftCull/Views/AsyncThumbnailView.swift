@@ -14,6 +14,8 @@ struct AsyncThumbnailView: View {
         self.size = size
         self.isVideo = isVideo
         self.crop = crop
+        let cached = ThumbnailService.shared.getCached(ThumbnailService.cacheKey(path: imagePath, size: size, crop: crop))
+        self._image = State(initialValue: cached)
     }
 
     @State private var image: NSImage?
@@ -83,7 +85,7 @@ struct AsyncThumbnailView: View {
         let service = ThumbnailService.shared
 
         if let cached = service.getCached(cacheId) {
-            self.image = cached
+            if image !== cached { self.image = cached }
             return
         }
 

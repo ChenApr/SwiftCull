@@ -66,7 +66,7 @@ final class ThumbnailService: @unchecked Sendable {
     private let stateQueue = DispatchQueue(label: "com.swiftcull.thumbnail.state")
     private let generationSemaphore = DispatchSemaphore(value: 4)
     private var inProgress: [String: PendingRequest] = [:]
-    private var preheatWaiters: [Waiter] = []
+    private var preheatWaiters: [String: Waiter] = [:]
     private var generation = 0
 
     private let diskCacheDir: URL
@@ -219,22 +219,28 @@ final class ThumbnailService: @unchecked Sendable {
     }
 
     func preloadThumbnails(paths: [(path: String, crop: CropRect?)], size: CGFloat) {
-        let obsolete = stateQueue.sync { () -> [Waiter] in
-            let old = preheatWaiters
-            preheatWaiters = []
-            return old
-        }
-        obsolete.forEach { $0.resolve(nil) }
         let items = paths
             .filter { !$0.path.isEmpty && getCached(Self.cacheKey(path: $0.path, size: size, crop: $0.crop)) == nil }
             .prefix(80)
-
-        for item in items {
-            let waiter = Waiter()
-            waiter.setCompletion { _ in }
-            stateQueue.sync { preheatWaiters.append(waiter) }
-            enqueue(path: item.path, id: Self.cacheKey(path: item.path, size: size, crop: item.crop),
-                    size: size, crop: item.crop, waiter: waiter, preheat: true)
+        let keyedItems = items.map { (id: Self.cacheKey(path: $0.path, size: size, crop: $0.crop),
+                                       path: $0.path, crop: $0.crop) }
+        let desired = Set(keyedItems.map(\.id))
+        let changes = stateQueue.sync { () -> (obsolete: [Waiter], additions: [(String, String, CropRect?, Waiter)]) in
+            let obsolete = preheatWaiters.filter { !desired.contains($0.key) }.map(\.value)
+            preheatWaiters = preheatWaiters.filter { desired.contains($0.key) }
+            var additions: [(String, String, CropRect?, Waiter)] = []
+            for item in keyedItems where preheatWaiters[item.id]?.isActive != true {
+                let waiter = Waiter()
+                preheatWaiters[item.id] = waiter
+                additions.append((item.id, item.path, item.crop, waiter))
+            }
+            return (obsolete, additions)
+        }
+        // Keep requests in the overlap of successive windows. Preheating has no
+        // UI callback, so completion/cancellation does not schedule main-actor work.
+        changes.obsolete.forEach { $0.resolve(nil) }
+        for (id, path, crop, waiter) in changes.additions {
+            enqueue(path: path, id: id, size: size, crop: crop, waiter: waiter, preheat: true)
         }
     }
 
@@ -269,16 +275,11 @@ final class ThumbnailService: @unchecked Sendable {
                         : Self.createInspectorThumbnail(path: path, crop: crop)
                 }
             } else if let crop {
-                // ImageIO's limit applies before cropping. Account for a small crop's
-                // fraction of the source so the final card still has enough pixels.
-                let fraction = max(0.001, min(crop.normalized.width, crop.normalized.height))
-                // Cropped grid cards previously decoded at 3x the quantized
-                // display size. Keep that fidelity while compensating for the
-                // crop being applied after ImageIO downsampling.
-                let maxPixels = Int((size * 3 / fraction).rounded(.up))
-                if let cgImage = try? CropImageService.image(path: path, crop: crop, maxPixelSize: maxPixels) {
-                    image = NSImage(cgImage: cgImage,
-                                    size: NSSize(width: cgImage.width, height: cgImage.height))
+                image = autoreleasepool {
+                    // Cards fill a square. Decode that visible center at the same
+                    // 3x fidelity, then release the larger source/crop backing store.
+                    Self.createCroppedThumbnail(path: path, crop: crop,
+                                                maxPixelSize: Int((size * 3).rounded(.up)), fillsSquare: true)
                 }
             } else if videoExtensions.contains(ext) {
                 image = Self.createVideoThumbnail(path: path, maxSize: size)
@@ -401,28 +402,41 @@ final class ThumbnailService: @unchecked Sendable {
     /// Decode only enough source pixels for the visible crop, then draw into a
     /// compact buffer so CGImage.cropping cannot retain a large source bitmap.
     private static func createInspectorThumbnail(path: String, crop: CropRect?) -> NSImage? {
+        createCroppedThumbnail(path: path, crop: crop, maxPixelSize: inspectorPixelSize)
+    }
+
+    private static func createCroppedThumbnail(path: String, crop: CropRect?, maxPixelSize: Int,
+                                               fillsSquare: Bool = false) -> NSImage? {
         guard let dimensions = try? CropImageService.orientedDimensions(path: path) else { return nil }
         let sourceEdge = Double(max(dimensions.width, dimensions.height))
-        let normalized = crop?.normalized
-        let cropWidth: Double = normalized?.width ?? 1
-        let cropHeight: Double = normalized?.height ?? 1
-        let visibleWidth = Double(dimensions.width) * cropWidth
-        let visibleHeight = Double(dimensions.height) * cropHeight
-        let visibleEdge = max(visibleWidth, visibleHeight)
+        let normalized = crop?.normalized ?? .full
+        let visibleWidth = Double(dimensions.width) * normalized.width
+        let visibleHeight = Double(dimensions.height) * normalized.height
+        let visibleEdge = fillsSquare ? min(visibleWidth, visibleHeight) : max(visibleWidth, visibleHeight)
         guard visibleEdge > 0 else { return nil }
-        let decodeSize = Int(min(sourceEdge, (Double(inspectorPixelSize) * sourceEdge / visibleEdge).rounded(.up)))
-        guard let decoded = try? CropImageService.image(path: path, crop: crop, maxPixelSize: decodeSize) else {
+        let decodeSize = Int(min(sourceEdge, (Double(maxPixelSize) * sourceEdge / visibleEdge).rounded(.up)))
+        guard let decoded = try? CropImageService.image(path: path, crop: normalized, maxPixelSize: decodeSize) else {
             return nil
         }
-        let scale = min(1, Double(inspectorPixelSize) / Double(max(decoded.width, decoded.height)))
-        let width = max(1, Int((Double(decoded.width) * scale).rounded(.down)))
-        let height = max(1, Int((Double(decoded.height) * scale).rounded(.down)))
+        let rendered: CGImage
+        if fillsSquare {
+            let edge = min(decoded.width, decoded.height)
+            let rect = CGRect(x: (decoded.width - edge) / 2, y: (decoded.height - edge) / 2,
+                              width: edge, height: edge)
+            guard let square = decoded.cropping(to: rect) else { return nil }
+            rendered = square
+        } else {
+            rendered = decoded
+        }
+        let scale = min(1, Double(maxPixelSize) / Double(max(rendered.width, rendered.height)))
+        let width = max(1, Int((Double(rendered.width) * scale).rounded(.down)))
+        let height = max(1, Int((Double(rendered.height) * scale).rounded(.down)))
         let colorSpace = decoded.colorSpace.flatMap { $0.model == .rgb ? $0 : nil } ?? CGColorSpaceCreateDeviceRGB()
         guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
                                       bytesPerRow: 0, space: colorSpace,
                                       bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
         context.interpolationQuality = .high
-        context.draw(decoded, in: CGRect(x: 0, y: 0, width: width, height: height))
+        context.draw(rendered, in: CGRect(x: 0, y: 0, width: width, height: height))
         guard let image = context.makeImage() else { return nil }
         return NSImage(cgImage: image, size: NSSize(width: width, height: height))
     }

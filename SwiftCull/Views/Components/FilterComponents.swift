@@ -5,6 +5,7 @@ struct GlassCard<Content: View>: View {
 
     var body: some View {
         content()
+            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(11)
             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             .overlay(

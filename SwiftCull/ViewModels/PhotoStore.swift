@@ -51,6 +51,7 @@ class PhotoStore: ObservableObject {
     @Published private(set) var isVideoPlaybackMode = false
     let videoPlaybackController = VideoPlaybackController()
     @Published var isSidebarVisible = true
+    @Published var isInspectorVisible = false
     @Published var showingShortcutGuide = false
     @Published var isSelectMode = false
     @Published var detectedVolumes: [DetectedVolume] = []
@@ -82,6 +83,7 @@ class PhotoStore: ObservableObject {
     private var gridColumnCount = 1
     private var currentLoadID = UUID()
     private var lastPreheatKey: String?
+    private var preheatTask: Task<Void, Never>?
     /// filteredPhotos 的 id→下标缓存，随 applyFilters 重建，供滚动预热/方向键导航 O(1) 定位。
     private var filteredIndexById: [String: Int] = [:]
     private var cachedTotalSize = ByteCountFormatter.string(fromByteCount: 0, countStyle: .file)
@@ -398,6 +400,8 @@ class PhotoStore: ObservableObject {
         currentLoadID = loadID
         tagWriteIDs.removeAll()
         lastPreheatKey = nil
+        preheatTask?.cancel()
+        preheatTask = nil
         thumbnailService.cancelPending()
         thumbnailService.clearInMemoryCache()
         thumbnailService.cleanupDiskCache()
@@ -633,19 +637,27 @@ class PhotoStore: ObservableObject {
         let columns = max(1, gridColumnCount)
         // 按「行」去重：同一行内多张卡片相继 onAppear 只触发一次预热，减少重复窗口扫描。
         let row = centerIndex / columns
-        let key = "\(row)|\(quantizedSize)|\(columns)"
+        let key = "\(filteredPhotosVersion)|\(row)|\(quantizedSize)|\(columns)"
         guard key != lastPreheatKey else { return }
         lastPreheatKey = key
 
-        let before = columns * 2
-        let after = columns * 4
-        let lowerBound = max(0, centerIndex - before)
-        let upperBound = min(filteredPhotos.count, centerIndex + after + 1)
-
-        let items = filteredPhotos[lowerBound..<upperBound].map { photo in
-            (path: photo.primaryFilePath, crop: photo.cropRect)
+        // Coalesce the row appearances in a scroll update before scanning the
+        // preheat window. Visible cards still request their images immediately.
+        preheatTask?.cancel()
+        let loadID = currentLoadID
+        let photosVersion = filteredPhotosVersion
+        preheatTask = Task { @MainActor [weak self] in
+            do { try await Task.sleep(for: .milliseconds(30)) }
+            catch { return }
+            guard let self, self.currentLoadID == loadID,
+                  self.filteredPhotosVersion == photosVersion else { return }
+            let lowerBound = max(0, centerIndex - columns * 2)
+            let upperBound = min(self.filteredPhotos.count, centerIndex + columns * 4 + 1)
+            let items = self.filteredPhotos[lowerBound..<upperBound].map { photo in
+                (path: photo.primaryFilePath, crop: photo.cropRect)
+            }
+            self.thumbnailService.preloadThumbnails(paths: items, size: CGFloat(quantizedSize))
         }
-        thumbnailService.preloadThumbnails(paths: items, size: CGFloat(quantizedSize))
     }
 
     func applyFilters() {
@@ -813,6 +825,11 @@ class PhotoStore: ObservableObject {
 
     func toggleSidebar() {
         isSidebarVisible.toggle()
+    }
+
+    func toggleInspector() {
+        guard selectedPhoto != nil else { return }
+        isInspectorVisible.toggle()
     }
 
     // MARK: - 批量操作（选择模式下仅改内存，落盘延迟到「完成」）

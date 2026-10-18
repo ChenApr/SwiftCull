@@ -101,9 +101,12 @@ bash Tests/run-watermark-smoke.sh
 bash Tests/run-photo-action-scope-smoke.sh
 bash Tests/run-crop-smoke.sh
 bash Tests/run-thumbnail-pipeline-smoke.sh
+bash Tests/run-grid-interaction-smoke.sh
 bash Tests/run-live-photo-smoke.sh
 bash Tests/run-data-integrity-smoke.sh
 ```
+
+网格交互测试需要已登录的 macOS 桌面，会短暂打开测试窗口，自动验证方向键导航和框选。
 
 ## 快捷键与手势
 
@@ -121,7 +124,8 @@ bash Tests/run-data-integrity-smoke.sh
 | `Q` / `Esc` | 确认多选模式中的批量标注 / 取消未提交的批量标注并退出多选；输入框聚焦时，`Esc` 取消输入焦点 |
 | `⌘C` | 复制所选版本，可在 Finder 中粘贴；裁剪版本会先生成对应文件 |
 | `Delete` | 请求将所选照片的关联文件移至废纸篓，确认后执行 |
-| `Tab` | 显示或隐藏侧边栏 |
+| `⌘B` 或 `Tab` | 显示或隐藏左栏 |
+| `⌘⇧B` | 显示或隐藏右栏 |
 
 鼠标拖拽可框选多张照片，双指捏合可调整网格缩略图大小。大图视图支持捏合、双击或使用 `＋` / `－` 缩放，并可拖拽平移。
 

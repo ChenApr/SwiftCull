@@ -39,6 +39,18 @@ enum KeyboardShortcutHandler {
             return false
         }
 
+        // Handle these before text-field and playback shortcuts. Consuming the
+        // event here also prevents the menu equivalent from toggling twice.
+        if chars == "b", flags.contains(.command), flags.isDisjoint(with: [.control, .option]) {
+            if flags.contains(.shift) {
+                guard store.selectedPhoto != nil else { return false }
+                store.toggleInspector()
+            } else {
+                store.toggleSidebar()
+            }
+            return true
+        }
+
         if keyCode == 8, flags.contains(.command),
            !flags.contains(.control), !flags.contains(.option), !flags.contains(.shift),
            !isTextFieldFocused, NSApp.modalWindow == nil,

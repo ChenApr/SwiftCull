@@ -752,7 +752,7 @@ struct PhotoGridContent: View {
     let columns: [GridItem]
     let groupingMode: PhotoGroupingMode
     let isSelectMode: Bool
-     @Binding var lastSelectedPhoto: PhotoEntry?
+    @Binding var lastSelectedPhoto: PhotoEntry?
     /// 非观察的帧缓存（引用型），避免滚动时用 @State 逐帧触发整个网格重算。
     @State private var frameStore = FrameStore()
     @State private var dragStart: CGPoint?
@@ -823,6 +823,16 @@ struct PhotoGridContent: View {
                             }
                         }
                     }
+                    .background {
+                        // One measurement for the grid, including the actual space
+                        // left by scrollbars. Keyboard navigation needs only this count.
+                        GeometryReader { gridGeometry in
+                            Color.clear.preference(
+                                key: PhotoGridColumnCountPreferenceKey.self,
+                                value: max(1, Int((gridGeometry.size.width + 4) / (gridSize + 4)))
+                            )
+                        }
+                    }
                     .padding(4)
                     .frame(minHeight: geometry.size.height, alignment: .topLeading)
                     .coordinateSpace(name: gridCoordinateSpace)
@@ -834,30 +844,17 @@ struct PhotoGridContent: View {
                     .contentShape(Rectangle())
                     .simultaneousGesture(gridInteractionGesture)
                     .onPreferenceChange(PhotoItemFramePreferenceKey.self) { frames in
-                        // 与原逻辑一致，仅把存储从 @State 换成非观察的 FrameStore：
-                        // 写入它不触发 body 失效与 LazyVGrid 重新布局，从根本上消除滚动逐帧重算。
-                        // 非拖拽态整体替换为当前可见帧（规模有限），拖拽态累积以覆盖已滚出视口的卡片。
-                        if dragStart == nil {
-                            frameStore.frames = frames
-                        } else {
-                            frameStore.frames.merge(frames, uniquingKeysWith: { _, new in new })
-                            updateDragSelection()
-                        }
-                        if let count = columnCount(from: frameStore.frames) {
-                            store.updateGridColumnCount(count)
-                        }
+                        guard dragStart != nil else { return }
+                        frameStore.frames.merge(frames, uniquingKeysWith: { _, new in new })
+                        updateDragSelection()
                     }
                 }
                 .padding(.horizontal, 14)
+                .onPreferenceChange(PhotoGridColumnCountPreferenceKey.self) { count in
+                    if count > 0 { store.updateGridColumnCount(count) }
+                }
                 .onAppear {
-                    updateGridColumnCount(width: geometry.size.width)
                     cachedPhotoIds = Set(store.filteredPhotos.map(\.id))
-                }
-                .onChange(of: geometry.size.width) { _, width in
-                    updateGridColumnCount(width: width)
-                }
-                .onChange(of: gridSize) { _, _ in
-                    updateGridColumnCount(width: geometry.size.width)
                 }
                 .onChange(of: store.filteredPhotosVersion) { _, _ in
                     frameStore.frames.removeAll(keepingCapacity: true)
@@ -922,14 +919,9 @@ struct PhotoGridContent: View {
         .onAppear {
             store.preloadThumbnails(around: photo, size: gridSize)
         }
-        .background(
-            GeometryReader { itemGeometry in
-                Color.clear.preference(
-                    key: PhotoItemFramePreferenceKey.self,
-                    value: [photo.id: itemGeometry.frame(in: .named(gridCoordinateSpace))]
-                )
-            }
-        )
+        .background {
+            PhotoItemFrameReader(photoID: photo.id, coordinateSpace: gridCoordinateSpace, dragStart: $dragStart)
+        }
     }
 
     private func isGroupSelected(_ group: PhotoGridSection) -> Bool {
@@ -962,6 +954,7 @@ struct PhotoGridContent: View {
                     let dy = value.location.y - value.startLocation.y
                     guard dx * dx + dy * dy >= 36 else { return }
                     resignTextInputFocus()
+                    frameStore.frames.removeAll(keepingCapacity: true)
                     didDragSelect = true
                     dragStart = value.startLocation
                     dragBaselineSelection = store.selectedPhotos
@@ -983,6 +976,7 @@ struct PhotoGridContent: View {
                 didDragSelect = false
                 dragBaselineSelection = []
                 dragSelectionMode = .replace
+                frameStore.frames.removeAll(keepingCapacity: true)
             }
     }
 
@@ -1004,7 +998,7 @@ struct PhotoGridContent: View {
     }
 
     private func updateDragSelection(force: Bool = false) {
-        guard let selectionRect else { return }
+        guard let selectionRect, !frameStore.frames.isEmpty else { return }
 
         let now = CFAbsoluteTimeGetCurrent()
         if !force {
@@ -1035,29 +1029,6 @@ struct PhotoGridContent: View {
         }
     }
 
-    private func updateGridColumnCount(width: CGFloat) {
-        // 初始估算（帧尚未就绪时的兜底）。稳态下由 columnCount(from:) 依据实际布局帧校正。
-        // 可用宽度 = 总宽 - ScrollView 水平内边距(14×2) - LazyVGrid 内边距(4×2)
-        let horizontalInset: CGFloat = 14 * 2 + 4 * 2
-        let columnSpacing: CGFloat = 4
-        let available = max(0, width - horizontalInset)
-        let count = max(1, Int((available + columnSpacing) / (gridSize + columnSpacing)))
-        store.updateGridColumnCount(count)
-    }
-
-    /// 根据照片卡片的实际布局帧推断每行列数：把处于同一行（minY 相同）的卡片计数，
-    /// 取所有行中的最大值即为满行列数。比按宽度估算精确，免疫内边距/滚动条等差异，
-    /// 从而保证方向键上/下在任意网格尺寸下都精准跨行。
-    private func columnCount(from frames: [String: CGRect]) -> Int? {
-        guard !frames.isEmpty else { return nil }
-        var perRow: [Int: Int] = [:]
-        for rect in frames.values {
-            let rowKey = Int(rect.minY.rounded())
-            perRow[rowKey, default: 0] += 1
-        }
-        return perRow.values.max()
-    }
-
     private func handleTap(photo: PhotoEntry) {
         let isCommandPressed = NSEvent.modifierFlags.contains(.command)
         let isShiftPressed = NSEvent.modifierFlags.contains(.shift)
@@ -1079,6 +1050,7 @@ struct PhotoGridContent: View {
                 activateSelectModeIfNeeded()
             } else {
                 store.selectPhoto(photo)
+                store.isInspectorVisible = true
                 lastSelectedPhoto = photo
             }
         }
@@ -1096,11 +1068,35 @@ private enum DragSelectionMode {
     case toggle
 }
 
-/// 非观察的引用型帧缓存：保存卡片在网格内容坐标系下的布局帧，供「点击命中反查」与
-/// 「拖拽框选」读取。因不是 @State/@Published，写入它不会触发 SwiftUI 视图失效，
-/// 从根本上消除滚动时逐帧全量重算（原实现用 @State 存帧，每帧都触发整个网格重建）。
+/// Frames are collected only during drag selection. Keeping the cache outside
+/// observable state avoids invalidating the grid when those frames arrive.
 private final class FrameStore {
     var frames: [String: CGRect] = [:]
+}
+
+private struct PhotoItemFrameReader: View {
+    let photoID: String
+    let coordinateSpace: String
+    @Binding var dragStart: CGPoint?
+
+    var body: some View {
+        // The binding lets cells in retained lazy sections observe tracking
+        // directly, without relying on their ForEach builder being reevaluated.
+        if dragStart != nil {
+            GeometryReader { geometry in
+                Color.clear.preference(key: PhotoItemFramePreferenceKey.self,
+                                       value: [photoID: geometry.frame(in: .named(coordinateSpace))])
+            }
+        }
+    }
+}
+
+private struct PhotoGridColumnCountPreferenceKey: PreferenceKey {
+    static let defaultValue = 0
+
+    static func reduce(value: inout Int, nextValue: () -> Int) {
+        value = max(value, nextValue())
+    }
 }
 
 struct PhotoItemFramePreferenceKey: PreferenceKey {

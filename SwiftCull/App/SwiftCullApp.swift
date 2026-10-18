@@ -17,6 +17,7 @@ struct SwiftCullApp: App {
         .windowToolbarStyle(.unified(showsTitle: true))
         .defaultSize(width: 1200, height: 800)
         .commands {
+            SidebarCommands(store: store)
             CommandGroup(replacing: .newItem) {
                 Button("打开文件夹...") {
                     store.selectPath()
