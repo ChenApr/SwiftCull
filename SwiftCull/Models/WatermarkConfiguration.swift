@@ -16,6 +16,8 @@ struct WatermarkConfiguration: Codable, Hashable, Identifiable, Sendable {
     var templateLayout: Bool?
     /// Preserves the built-in preset's automatic landscape/portrait choice after saving.
     var matchOrientation: Bool?
+    /// Optional for compatibility with previously saved watermark presets.
+    var border: PhotoBorderConfiguration?
 
     enum Background: String, Codable, CaseIterable, Identifiable, Sendable {
         case solid = "纯色"
@@ -76,7 +78,7 @@ struct WatermarkConfiguration: Codable, Hashable, Identifiable, Sendable {
     /// Apply edits relative to the starting template when a photo needs the other orientation.
     /// Unchanged controls take that orientation's exact built-in defaults.
     func adapted(to preset: WatermarkPreset) -> WatermarkConfiguration {
-        guard templateLayout == true, preset != basePreset else { return self }
+        guard border == nil, templateLayout == true, preset != basePreset else { return self }
         let original = Self.draft(from: basePreset)
         var adapted = Self.draft(from: preset)
         adapted.id = id

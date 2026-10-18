@@ -90,6 +90,7 @@ enum WatermarkError: LocalizedError {
 }
 
 enum WatermarkExportChoice: Hashable, Sendable {
+    case border
     case builtIn(WatermarkPreset)
     case custom(UUID)
 }
@@ -113,11 +114,17 @@ struct WatermarkReviewItem: Identifiable, Sendable {
     var choice: WatermarkExportChoice = .builtIn(.standard)
     var matchOrientation = true
     var overlays: [WatermarkOverlayChoice] = []
+    var border = PhotoBorderConfiguration()
+    var watermarkChoice: WatermarkExportChoice = .builtIn(.standard)
+    var borderChoice: WatermarkExportChoice = .border
+    /// Unsaved per-photo edits do not modify the reusable preset on disk.
+    var customDraft: WatermarkConfiguration?
     var id: String { photo.id }
 }
 
 /// Immutable choices captured from the review sheet so preview and export use the same settings.
 enum WatermarkExportStyle: Sendable {
+    case border(PhotoBorderConfiguration)
     case preset(WatermarkPreset)
     case custom(WatermarkConfiguration)
 }
@@ -136,6 +143,18 @@ struct WatermarkExportRequest: Sendable {
 }
 
 enum WatermarkReviewPlan {
+    static func applyStyle(from source: WatermarkReviewItem, to items: inout [WatermarkReviewItem]) {
+        for index in items.indices where items[index].include {
+            items[index].choice = source.choice
+            items[index].matchOrientation = source.matchOrientation
+            items[index].overlays = source.overlays
+            items[index].border = source.border
+            items[index].customDraft = source.customDraft
+            items[index].watermarkChoice = source.watermarkChoice
+            items[index].borderChoice = source.borderChoice
+        }
+    }
+
     static func requests(from items: [WatermarkReviewItem],
                          configurations: [WatermarkConfiguration]) throws -> [WatermarkExportRequest] {
         try items.filter(\.include).map { try request(for: $0, configurations: configurations) }
@@ -143,8 +162,14 @@ enum WatermarkReviewPlan {
 
     static func request(for item: WatermarkReviewItem,
                         configurations: [WatermarkConfiguration]) throws -> WatermarkExportRequest {
-        let primary = try layer(for: item.choice, matchOrientation: item.matchOrientation,
-                                configurations: configurations)
+        var effectiveConfigurations = configurations
+        if let draft = item.customDraft, item.choice == .custom(draft.id) {
+            effectiveConfigurations.removeAll { $0.id == draft.id }
+            effectiveConfigurations.append(draft)
+        }
+        let primary = item.choice == .border
+            ? WatermarkExportLayer(style: .border(item.border), matchOrientation: false)
+            : try layer(for: item.choice, matchOrientation: item.matchOrientation, configurations: effectiveConfigurations)
         let overlays = try item.overlays.map {
             try layer(for: $0.choice, matchOrientation: $0.matchOrientation,
                       configurations: configurations)
@@ -157,6 +182,8 @@ enum WatermarkReviewPlan {
     private static func layer(for choice: WatermarkExportChoice, matchOrientation: Bool,
                               configurations: [WatermarkConfiguration]) throws -> WatermarkExportLayer {
         switch choice {
+        case .border:
+            throw WatermarkError.missingPreset
         case .builtIn(let preset):
             return WatermarkExportLayer(style: .preset(preset), matchOrientation: matchOrientation)
         case .custom(let id):
@@ -173,6 +200,8 @@ enum WatermarkService {
                            style: WatermarkExportStyle,
                            matchOrientation: Bool) throws -> SemiWatermarkRenderer.RenderedCanvas {
         switch style {
+        case .border(let configuration):
+            return try PhotoBorderRenderer.render(image: prepared.semi.image, configuration: configuration)
         case .preset(let preset):
             return try SemiWatermarkRenderer.renderCanvas(prepared: prepared.semi, preset: preset,
                                                            matchOrientation: matchOrientation)
@@ -186,8 +215,9 @@ enum WatermarkService {
                        base: SemiWatermarkRenderer.RenderedCanvas,
                        overlays: [WatermarkExportLayer]) throws -> NSBitmapImageRep {
         let portrait = prepared.semi.image.height > prepared.semi.image.width
-        let configurations: [WatermarkConfiguration] = overlays.map { layer in
+        let configurations: [WatermarkConfiguration] = overlays.compactMap { layer in
             switch layer.style {
+            case .border: return nil
             case .preset(let preset):
                 return .draft(from: preset.resolved(isPortrait: portrait,
                                                     matchOrientation: layer.matchOrientation))
@@ -238,7 +268,14 @@ enum WatermarkService {
     @discardableResult
     static func export(request: WatermarkExportRequest, to directory: URL) throws -> URL {
         let data = try jpegData(request: request)
-        return try write(data, photo: request.photo, sourcePath: request.sourcePath, to: directory)
+        let suffix: String
+        switch request.style {
+        case .border where request.overlays.isEmpty: suffix = "_border"
+        case .custom(let configuration) where configuration.border != nil &&
+            configuration.components.isEmpty && request.overlays.isEmpty: suffix = "_border"
+        default: suffix = "_watermark"
+        }
+        return try write(data, photo: request.photo, sourcePath: request.sourcePath, to: directory, suffix: suffix)
     }
 
     static func render(photo: PhotoEntry, preset: WatermarkPreset, sourcePath: String? = nil,
@@ -300,10 +337,11 @@ enum WatermarkService {
         return try write(data, photo: photo, sourcePath: sourcePath, to: directory)
     }
 
-    private static func write(_ data: Data, photo: PhotoEntry, sourcePath: String, to directory: URL) throws -> URL {
+    private static func write(_ data: Data, photo: PhotoEntry, sourcePath: String, to directory: URL,
+                              suffix outputSuffix: String = "_watermark") throws -> URL {
         let source = URL(fileURLWithPath: sourcePath)
         let versionSuffix = photo.isVersionCopy ? "_\(photo.versionID!.uuidString.prefix(8))" : ""
-        let name = source.deletingPathExtension().lastPathComponent + versionSuffix + "_watermark"
+        let name = source.deletingPathExtension().lastPathComponent + versionSuffix + outputSuffix
         let fileManager = FileManager.default
         let temporary = directory.appendingPathComponent(".swiftcull-\(UUID().uuidString).tmp")
         try data.write(to: temporary, options: .atomic)

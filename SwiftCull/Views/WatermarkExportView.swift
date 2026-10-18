@@ -12,7 +12,7 @@ struct WatermarkExportView: View {
     /// Nil reviews the filtered batch; a supplied array reviews only those photos.
     let photos: [PhotoEntry]?
     @Environment(\.dismiss) private var dismiss
-    @StateObject private var presetStore = WatermarkPresetStore()
+    @StateObject private var presetStore: WatermarkPresetStore
 
     @State private var items: [WatermarkReviewItem] = []
     @State private var currentIndex = 0
@@ -27,10 +27,15 @@ struct WatermarkExportView: View {
     @State private var editingOverlayID: UUID?
     @State private var deleteConfirmation = false
     @State private var presetError: String?
+    @State private var showOverlays = false
+    @State private var isRendering = false
+    @State private var nativePhotoSize: CGSize?
+    @State private var batchStatus: String?
 
-    init(store: PhotoStore, photos: [PhotoEntry]? = nil) {
+    init(store: PhotoStore, photos: [PhotoEntry]? = nil, presetDirectory: URL? = nil) {
         self.store = store
         self.photos = photos
+        _presetStore = StateObject(wrappedValue: WatermarkPresetStore(directory: presetDirectory))
     }
 
     private var currentItem: WatermarkReviewItem? {
@@ -41,12 +46,14 @@ struct WatermarkExportView: View {
 
     private var currentConfiguration: WatermarkConfiguration? {
         guard let currentItem, case .custom(let id) = currentItem.choice else { return nil }
+        if let draft = currentItem.customDraft, draft.id == id { return draft }
         return presetStore.configurations.first { $0.id == id }
     }
 
     private var currentPreset: WatermarkPreset {
         guard let currentItem else { return .standard }
         switch currentItem.choice {
+        case .border: return .standard
         case .builtIn(let preset): return preset
         case .custom: return currentConfiguration?.basePreset ?? .standard
         }
@@ -56,15 +63,13 @@ struct WatermarkExportView: View {
         guard let currentItem,
               currentConfiguration?.matchOrientation == true ||
                 (currentConfiguration == nil && currentItem.matchOrientation),
-              let image = try? CropImageService.image(path: currentItem.sourcePath,
-                                                      crop: currentItem.photo.cropRect,
-                                                      maxPixelSize: 128) else { return currentPreset }
-        return currentPreset.resolved(isPortrait: image.height > image.width, matchOrientation: true)
+              let size = nativePhotoSize else { return currentPreset }
+        return currentPreset.resolved(isPortrait: size.height > size.width, matchOrientation: true)
     }
 
     private var primaryKey: String {
         guard let currentItem else { return "empty" }
-        return "\(currentItem.id)|\(currentItem.choice)|\(currentItem.matchOrientation)|\(currentConfiguration?.hashValue ?? 0)"
+        return "\(currentItem.id)|\(currentItem.choice)|\(currentItem.matchOrientation)|\(currentConfiguration?.hashValue ?? 0)|\(currentItem.border.hashValue)"
     }
 
     private var previewKey: String {
@@ -78,7 +83,13 @@ struct WatermarkExportView: View {
 
     private var choiceBinding: Binding<WatermarkExportChoice> {
         Binding(get: { currentItem?.choice ?? .builtIn(.standard) },
-                set: { if items.indices.contains(currentIndex) { items[currentIndex].choice = $0 } })
+                set: {
+                    guard items.indices.contains(currentIndex) else { return }
+                    items[currentIndex].choice = $0
+                    items[currentIndex].customDraft = nil
+                    if $0 == .border || configuration(for: $0)?.border != nil { items[currentIndex].borderChoice = $0 }
+                    else { items[currentIndex].watermarkChoice = $0 }
+                })
     }
 
     private var orientationBinding: Binding<Bool> {
@@ -91,35 +102,57 @@ struct WatermarkExportView: View {
                 set: { if items.indices.contains(currentIndex) { items[currentIndex].include = $0 } })
     }
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(photos?.count == 1 ? "单张水印导出预览" : "批量水印导出预览")
-                        .font(.title2.bold())
-                    Text("逐张检查水印，选择样式并决定是否导出")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                Text("已勾选 \(selectedCount) / \(items.count) 张")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-                Button("关闭") { dismiss() }
-            }
+    private var isBorderMode: Bool { currentItem?.choice == .border || currentConfiguration?.border != nil }
 
-            HStack(alignment: .top, spacing: 14) {
-                if items.count > 1 { photoList.frame(width: 228) }
-                previewPanel
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                controls
-                    .frame(width: 270)
+    private var outputSizeText: String? {
+        guard isBorderMode, let size = nativePhotoSize else { return nil }
+        let layout = borderBinding.wrappedValue.layout(photoSize: size)
+        return "导出 \(Int(layout.canvas.width)) × \(Int(layout.canvas.height)) px · JPEG"
+    }
+
+    private var borderBinding: Binding<PhotoBorderConfiguration> {
+        Binding(get: { currentConfiguration?.border ?? currentItem?.border ?? PhotoBorderConfiguration() },
+                set: { value in
+                    guard items.indices.contains(currentIndex) else { return }
+                    items[currentIndex].border = value
+                    if var configuration = currentConfiguration, configuration.border != nil {
+                        configuration.border = value
+                        items[currentIndex].customDraft = configuration
+                    } else {
+                        items[currentIndex].choice = .border
+                    }
+                })
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            Divider()
+            HStack(spacing: 0) {
+                VStack(spacing: 0) {
+                    previewPanel.padding(20)
+                    if items.count > 1 {
+                        Divider()
+                        photoList
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                Divider()
+                controls.frame(width: 316)
             }
+            Divider()
+            exportBar
         }
-        .padding(18)
-        .frame(width: photos?.count == 1 ? 880 : 1120, height: 690)
+        .background(Color(nsColor: .windowBackgroundColor))
+        .frame(width: photos?.count == 1 ? 980 : 1100, height: 740)
         .onAppear(perform: prepareReview)
         .task(id: previewKey) { await loadPreview() }
+        .onChange(of: previewKey) { _, _ in batchStatus = nil }
+        .onChange(of: selectedCount) { _, _ in batchStatus = nil }
+        .onDisappear {
+            previewPreparation?.cancel()
+            previewBase?.cancel()
+        }
         .sheet(item: $editingConfiguration) { configuration in
             WatermarkPresetEditorView(configuration: configuration, photo: currentItem?.photo,
                                       sourcePath: currentItem?.sourcePath) { updated in
@@ -130,6 +163,7 @@ struct WatermarkExportView: View {
                         items[currentIndex].overlays[index].choice = .custom(updated.id)
                     } else {
                         items[currentIndex].choice = .custom(updated.id)
+                        items[currentIndex].customDraft = nil
                     }
                 }
                 editingOverlayID = nil
@@ -138,195 +172,303 @@ struct WatermarkExportView: View {
         .confirmationDialog("删除自定义预设？", isPresented: $deleteConfirmation) {
             Button("删除预设", role: .destructive) { deleteCurrentPreset() }
         }
-        .alert("预设操作失败", isPresented: Binding(
+        .alert("无法完成操作", isPresented: Binding(
             get: { presetError != nil }, set: { if !$0 { presetError = nil } }
         )) { Button("好") { presetError = nil } } message: { Text(presetError ?? "") }
+    }
+
+    private var header: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "photo.artframe")
+                .font(.system(size: 20)).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("边框与水印").font(.system(size: 17, weight: .semibold))
+                Text(items.count > 1 ? "调整当前照片，或将样式应用到已勾选照片" : "选择样式，预览后导出")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            if items.count > 1 {
+                Text("已勾选 \(selectedCount) / \(items.count) 张")
+                    .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+            }
+            Button { dismiss() } label: {
+                Image(systemName: "xmark").font(.system(size: 12, weight: .medium))
+                    .frame(width: 26, height: 26).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain).help("关闭")
+            .accessibilityLabel("关闭边框与水印")
+        }
+        .padding(.horizontal, 20).padding(.vertical, 16)
     }
 
     private var photoList: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("待处理照片").font(.headline)
+                Text("照片").font(.caption.weight(.medium)).foregroundStyle(.secondary)
+                Button("将当前样式应用到已勾选的 \(selectedCount) 张") { applyCurrentStyleToAll() }
+                    .buttonStyle(.bordered).controlSize(.small)
+                    .disabled(selectedCount == 0)
+                    .help("同步边框、水印与叠加层，跳过未勾选照片")
                 Spacer()
-                Button("全选") { setAllIncluded(true) }.font(.caption)
-                Button("全不选") { setAllIncluded(false) }.font(.caption)
+                Button("全选") { setAllIncluded(true) }
+                Button("全不选") { setAllIncluded(false) }
             }
+            .font(.caption).buttonStyle(.borderless)
             ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(spacing: 5) {
+                ScrollView(.horizontal) {
+                    LazyHStack(spacing: 10) {
                         ForEach(items.indices, id: \.self) { index in
-                            reviewRow(index)
-                                .id(index)
+                            reviewRow(index).id(index)
                         }
                     }
+                    .padding(3)
                 }
-                .onChange(of: currentIndex) { _, index in
-                    withAnimation { proxy.scrollTo(index, anchor: .center) }
-                }
+                .scrollIndicators(.hidden)
+                .onChange(of: currentIndex) { _, index in proxy.scrollTo(index, anchor: .center) }
             }
         }
+        .padding(.horizontal, 20).padding(.vertical, 12)
+        .frame(height: 132)
     }
 
     private func reviewRow(_ index: Int) -> some View {
         let item = items[index]
-        return HStack(spacing: 7) {
-            Toggle("导出 \(item.photo.displayName)", isOn: $items[index].include)
-                .labelsHidden()
-            Button {
-                currentIndex = index
-            } label: {
-                HStack(spacing: 7) {
-                    AsyncThumbnailView(photoId: item.photo.id, imagePath: item.sourcePath, size: 46,
-                                       crop: item.photo.cropRect)
-                        .frame(width: 46, height: 46)
-                        .clipped()
-                        .clipShape(RoundedRectangle(cornerRadius: 4))
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(item.photo.displayName)
-                            .font(.caption.weight(.medium))
-                            .lineLimit(1)
-                        Text(item.overlays.isEmpty ? label(for: item.choice)
-                             : "\(label(for: item.choice)) + \(item.overlays.count) 层")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
+        return VStack(spacing: 5) {
+            Button { currentIndex = index } label: {
+                AsyncThumbnailView(photoId: item.photo.id, imagePath: item.sourcePath, size: 70,
+                                   crop: item.photo.cropRect)
+                    .frame(width: 76, height: 60).clipped()
+                    .clipShape(RoundedRectangle(cornerRadius: 5))
+                    .opacity(item.include ? 1 : 0.4)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 5)
+                            .strokeBorder(index == currentIndex ? Color.accentColor : .clear, lineWidth: 2)
                     }
-                    Spacer(minLength: 0)
-                }
-                .contentShape(Rectangle())
+                    .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.plain).help(item.photo.displayName)
+            Toggle(isOn: $items[index].include) {
+                Text(item.photo.displayName).font(.system(size: 10)).lineLimit(1)
+            }
+            .toggleStyle(.checkbox)
+            .help("勾选此照片以导出")
         }
-        .padding(5)
-        .background(index == currentIndex ? Color.accentColor.opacity(0.16) : Color.clear,
-                    in: RoundedRectangle(cornerRadius: 7))
+        .frame(width: 82)
     }
 
     private var previewPanel: some View {
-        VStack(spacing: 9) {
+        VStack(spacing: 14) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(currentItem?.photo.displayName ?? "没有可处理的照片")
+                        .font(.subheadline.weight(.semibold)).lineLimit(1)
+                    Text(isBorderMode ? "完整照片 · 居中留白" : "实时预览")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                if items.count > 1 {
+                    Button { currentIndex -= 1 } label: { Image(systemName: "chevron.left") }
+                        .disabled(currentIndex == 0)
+                    Text("\(currentIndex + 1) / \(items.count)")
+                        .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                    Button { currentIndex += 1 } label: { Image(systemName: "chevron.right") }
+                        .disabled(currentIndex >= items.count - 1)
+                }
+            }
+            .buttonStyle(.borderless)
             ZStack {
-                Color(nsColor: .controlBackgroundColor)
+                Color.primary.opacity(0.035)
                 if let preview {
-                    Image(nsImage: preview).resizable().scaledToFit().padding(12)
+                    Image(nsImage: preview).resizable().scaledToFit().padding(24)
+                        .shadow(color: .black.opacity(0.1), radius: 8, y: 3)
                 } else if let previewError {
                     ContentUnavailableView("预览失败", systemImage: "photo.badge.exclamationmark",
                                            description: Text(previewError))
+                } else if items.isEmpty {
+                    ContentUnavailableView("没有可处理的照片", systemImage: "photo",
+                                           description: Text("请选择 JPEG、HEIC、TIFF 或 RAW 照片。"))
                 } else {
                     ProgressView("正在生成预览…")
                 }
             }
             .clipShape(RoundedRectangle(cornerRadius: 10))
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-            if let currentItem {
-                HStack(spacing: 8) {
-                    Button { currentIndex -= 1 } label: { Image(systemName: "chevron.left") }
-                        .disabled(currentIndex == 0)
-                    Text("\(currentIndex + 1) / \(items.count) · \(currentItem.photo.displayName)")
-                        .font(.caption.monospacedDigit())
-                        .lineLimit(1)
-                    Button { currentIndex += 1 } label: { Image(systemName: "chevron.right") }
-                        .disabled(currentIndex == items.count - 1)
-                    Spacer()
-                    Text(currentItem.include ? "将导出" : "已跳过")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(currentItem.include ? Color.accentColor : .secondary)
+            .overlay(alignment: .topTrailing) {
+                if isRendering, preview != nil {
+                    ProgressView().controlSize(.small).padding(12)
                 }
-                .buttonStyle(.borderless)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            HStack {
+                Text(previewError ?? outputSizeText ?? "预览使用缩小图像，导出保留照片分辨率")
+                    .font(.caption).foregroundStyle(previewError == nil ? Color.secondary : Color.red)
+                    .lineLimit(2)
+                Spacer()
+                if currentItem != nil {
+                    Toggle("导出此照片", isOn: includeBinding).toggleStyle(.checkbox).font(.caption)
+                }
             }
         }
     }
 
     private var controls: some View {
-        VStack(alignment: .leading, spacing: 11) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 11) {
-                    Text("当前照片").font(.headline)
-                    Toggle("导出这张照片", isOn: includeBinding)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                Picker("样式", selection: Binding(
+                    get: { isBorderMode },
+                    set: setBorderMode
+                )) {
+                    Text("边框").tag(true)
+                    Text("水印").tag(false)
+                }
+                .pickerStyle(.segmented).labelsHidden()
+                .accessibilityLabel("边框或水印")
 
-                    Picker("基础预设", selection: choiceBinding) { presetChoices }
+                if isBorderMode {
+                    editorSection("边框", subtitle: "只增加留白，不裁切照片") {
+                        PhotoBorderControls(configuration: borderBinding)
+                    }
+                } else {
+                    editorSection("水印样式", subtitle: "横竖照片自动匹配，无需逐张选择") {
+                        Picker("样式", selection: choiceBinding) { presetChoices }
+                            .labelsHidden()
+                        Toggle("自动匹配横竖方向", isOn: orientationBinding)
+                            .font(.caption).disabled(currentConfiguration != nil)
+                        Text(currentConfiguration == nil ? currentPreset.detail : "使用已保存的画布与组件")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
 
-                    Toggle("按照片方向匹配", isOn: orientationBinding)
-                        .disabled(currentConfiguration != nil)
-                    Text(currentConfiguration == nil ? currentPreset.detail : "自定义画布和组件")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                if !presetStore.configurations.isEmpty || currentConfiguration != nil {
+                    editorSection("我的预设") {
+                        Picker("已保存", selection: choiceBinding) {
+                            if currentConfiguration == nil {
+                                Text(isBorderMode ? "当前边框" : "当前水印").tag(currentItem?.choice ?? .border)
+                            }
+                            ForEach(presetStore.configurations) { configuration in
+                                Text(configuration.name).tag(WatermarkExportChoice.custom(configuration.id))
+                            }
+                        }
+                        .labelsHidden()
+                        if currentConfiguration != nil {
+                            HStack {
+                                Button("编辑…") { editCurrentPreset(copy: false) }
+                                Spacer()
+                                Button("删除", role: .destructive) { deleteConfirmation = true }
+                            }
+                            .font(.caption).buttonStyle(.borderless)
+                        }
+                    }
+                }
+                HStack {
+                    Button("保存为预设…") { editCurrentPreset(copy: true) }
+                    if !isBorderMode, currentConfiguration == nil {
+                        Spacer()
+                        Button("自定义…") { editCurrentPreset(copy: false) }
+                    }
+                }
+                .font(.caption).buttonStyle(.borderless)
 
-                    Divider()
-                    Text("叠加层").font(.headline)
-                    if let currentItem {
-                        ForEach(currentItem.overlays) { overlay in
-                            if let index = currentItem.overlays.firstIndex(where: { $0.id == overlay.id }) {
+                Divider()
+                DisclosureGroup("进阶 · 叠加文字与 Logo", isExpanded: $showOverlays) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("可在照片或留白上叠加水印；叠加层不改变画布。")
+                            .font(.caption).foregroundStyle(.secondary)
+                        if let currentItem {
+                            ForEach(Array(currentItem.overlays.enumerated()), id: \.element.id) { index, overlay in
                                 overlayControls(overlay, index: index, count: currentItem.overlays.count)
                             }
                         }
-                    }
-                    Menu {
-                        Section("横拍模板") {
-                            ForEach(WatermarkPreset.landscapePresets) { preset in
-                                Button(preset.rawValue) { addOverlay(.builtIn(preset)) }
-                            }
-                        }
-                        Section("竖拍模板") {
-                            ForEach(WatermarkPreset.portraitPresets) { preset in
-                                Button(preset.rawValue) { addOverlay(.builtIn(preset)) }
-                            }
-                        }
-                        if !presetStore.configurations.isEmpty {
-                            Section("自定义预设") {
-                                ForEach(presetStore.configurations) { configuration in
-                                    Button(configuration.name) { addOverlay(.custom(configuration.id)) }
+                        Menu {
+                            Button("右下角拍摄参数") { addOverlay(.builtIn(.cornerParameters)) }
+                            Button("文件夹与日期") { addOverlay(.builtIn(.folderAndDate)) }
+                            Divider()
+                            Section("更多水印") {
+                                ForEach(WatermarkPreset.landscapePresets) { preset in
+                                    Button(preset.rawValue) { addOverlay(.builtIn(preset)) }
                                 }
                             }
-                        }
-                    } label: {
-                        Label("添加叠加层", systemImage: "plus")
-                    }
-                    .disabled((currentItem?.overlays.count ?? 0) >= 8)
-                    Text("基础预设决定画布；叠加层绘制文字和 Logo。底栏内容需要基础预设带有底栏。")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-
-                    Button("将这组水印应用到全部照片") { applyCurrentStyleToAll() }
-                        .disabled(items.count < 2)
-
-                    HStack {
-                        Button("新建预设…") {
-                            editingOverlayID = nil
-                            editingConfiguration = WatermarkConfiguration.draft(from: presetForEditor)
-                            editingConfiguration?.matchOrientation = currentConfiguration == nil
-                                ? currentItem?.matchOrientation : currentConfiguration?.matchOrientation
-                        }
-                        Button("编辑预设…") {
-                            editingOverlayID = nil
-                            editingConfiguration = currentConfiguration?.adapted(to: presetForEditor)
-                                ?? WatermarkConfiguration.draft(from: presetForEditor)
-                            if currentConfiguration == nil {
-                                editingConfiguration?.matchOrientation = currentItem?.matchOrientation
+                            if !presetStore.configurations.isEmpty {
+                                Section("我的预设") {
+                                    ForEach(presetStore.configurations) { configuration in
+                                        Button(configuration.name) { addOverlay(.custom(configuration.id)) }
+                                    }
+                                }
                             }
-                        }
+                        } label: { Label("添加叠加层", systemImage: "plus") }
+                        .disabled((currentItem?.overlays.count ?? 0) >= 8)
                     }
-                    if currentConfiguration != nil {
-                        Button("删除此预设", role: .destructive) { deleteConfirmation = true }
-                    }
+                    .padding(.top, 10)
                 }
-            }
+                .font(.subheadline.weight(.medium))
+                .tint(.secondary)
 
-            Divider()
-            Text("输出目录").font(.headline)
-            Text(outputDirectory?.path ?? "尚未选择")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(3)
-                .textSelection(.enabled)
-            Button("选择目录…") { chooseDirectory() }
-            Text("仅导出已勾选照片为 JPEG；RAW 源文件会生成 JPEG。原文件保持不变。")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Button("导出 \(selectedCount) 张水印照片") { exportCheckedPhotos() }
-                .buttonStyle(.borderedProminent)
-                .disabled(outputDirectory == nil || selectedCount == 0 || store.isExporting)
+            }
+            .padding(20)
         }
+        .disabled(currentItem == nil)
+    }
+
+    private func editorSection<Content: View>(_ title: String, subtitle: String? = nil,
+                                              @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title).font(.subheadline.weight(.semibold))
+                if let subtitle { Text(subtitle).font(.caption).foregroundStyle(.secondary) }
+            }
+            content()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var exportBar: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "folder").foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(outputDirectory?.lastPathComponent ?? "选择导出位置")
+                    .font(.subheadline).lineLimit(1)
+                Text(outputDirectory?.path ?? "导出 JPEG，保留原文件")
+                    .font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+            }
+            Button(outputDirectory == nil ? "选择…" : "更改…") { chooseDirectory() }
+                .font(.caption).buttonStyle(.borderless)
+            Spacer(minLength: 12)
+            if let batchStatus {
+                Text(batchStatus).font(.caption).foregroundStyle(.secondary)
+            }
+            Button(outputDirectory == nil ? "选择目录并导出 \(selectedCount) 张…" : "导出 \(selectedCount) 张") {
+                if outputDirectory == nil { chooseDirectory() }
+                if outputDirectory != nil { exportCheckedPhotos() }
+            }
+            .buttonStyle(.borderedProminent).controlSize(.large)
+            .disabled(selectedCount == 0 || store.isExporting || items.isEmpty)
+        }
+        .padding(.horizontal, 20).padding(.vertical, 14)
+    }
+
+    private func editCurrentPreset(copy: Bool) {
+        editingOverlayID = nil
+        if isBorderMode {
+            editingConfiguration = currentConfiguration ?? WatermarkConfiguration(
+                name: "居中边框", basePreset: .standard, components: [], border: borderBinding.wrappedValue)
+        } else {
+            editingConfiguration = currentConfiguration?.adapted(to: presetForEditor)
+                ?? WatermarkConfiguration.draft(from: presetForEditor)
+            if currentConfiguration == nil { editingConfiguration?.matchOrientation = currentItem?.matchOrientation }
+        }
+        if copy {
+            editingConfiguration?.id = UUID()
+            editingConfiguration?.name += " · 副本"
+        }
+    }
+
+    private func setBorderMode(_ enabled: Bool) {
+        guard items.indices.contains(currentIndex), enabled != isBorderMode else { return }
+        if isBorderMode {
+            items[currentIndex].borderChoice = items[currentIndex].choice
+        } else {
+            items[currentIndex].watermarkChoice = items[currentIndex].choice
+        }
+        items[currentIndex].choice = enabled ? items[currentIndex].borderChoice : items[currentIndex].watermarkChoice
     }
 
     @ViewBuilder private var presetChoices: some View {
@@ -422,15 +564,14 @@ struct WatermarkExportView: View {
         let saved = configuration(for: overlay.choice)
         let preset: WatermarkPreset
         switch overlay.choice {
+        case .border: return
         case .builtIn(let selected): preset = selected
         case .custom: preset = saved?.basePreset ?? .standard
         }
         let matchOrientation = saved?.matchOrientation ?? overlay.matchOrientation
         let selected: WatermarkPreset
-        if matchOrientation, let currentItem,
-           let image = try? CropImageService.image(path: currentItem.sourcePath,
-                                                   crop: currentItem.photo.cropRect, maxPixelSize: 128) {
-            selected = preset.resolved(isPortrait: image.height > image.width, matchOrientation: true)
+        if matchOrientation, let size = nativePhotoSize {
+            selected = preset.resolved(isPortrait: size.height > size.width, matchOrientation: true)
         } else {
             selected = preset
         }
@@ -453,35 +594,28 @@ struct WatermarkExportView: View {
         }
     }
 
-    private func label(for choice: WatermarkExportChoice) -> String {
-        switch choice {
-        case .builtIn(let preset): return preset.rawValue
-        case .custom(let id):
-            return presetStore.configurations.first(where: { $0.id == id })?.name ?? "自定义预设"
-        }
-    }
-
     private func setAllIncluded(_ included: Bool) {
         for index in items.indices { items[index].include = included }
     }
 
     private func applyCurrentStyleToAll() {
         guard let currentItem else { return }
-        for index in items.indices {
-            items[index].choice = currentItem.choice
-            items[index].matchOrientation = currentItem.matchOrientation
-            items[index].overlays = currentItem.overlays
-        }
+        WatermarkReviewPlan.applyStyle(from: currentItem, to: &items)
+        batchStatus = "已同步到 \(selectedCount) 张照片"
     }
 
     private func deleteCurrentPreset() {
         guard let currentItem, case .custom(let id) = currentItem.choice else { return }
+        let fallback: WatermarkExportChoice = isBorderMode ? .border : .builtIn(.standard)
         do {
             try presetStore.delete(id)
-            for index in items.indices where items[index].choice == .custom(id) {
-                items[index].choice = .builtIn(.standard)
-            }
             for index in items.indices {
+                if items[index].choice == .custom(id) {
+                    items[index].choice = fallback
+                }
+                if items[index].borderChoice == .custom(id) { items[index].borderChoice = .border }
+                if items[index].watermarkChoice == .custom(id) { items[index].watermarkChoice = .builtIn(.standard) }
+                if items[index].customDraft?.id == id { items[index].customDraft = nil }
                 items[index].overlays.removeAll { $0.choice == .custom(id) }
             }
         } catch { presetError = error.localizedDescription }
@@ -489,7 +623,7 @@ struct WatermarkExportView: View {
 
     private func chooseDirectory() {
         let panel = NSOpenPanel()
-        panel.title = "选择水印照片输出目录"
+        panel.title = "选择照片输出目录"
         panel.prompt = "使用此目录"
         panel.canCreateDirectories = true
         panel.canChooseDirectories = true
@@ -511,6 +645,9 @@ struct WatermarkExportView: View {
     }
 
     private func loadPreview() async {
+        let key = previewKey
+        isRendering = true
+        defer { if previewKey == key { isRendering = false } }
         previewError = nil
         guard let currentItem else { return }
         if preparedPhotoID != currentItem.id {
@@ -521,8 +658,10 @@ struct WatermarkExportView: View {
             previewBase = nil
             preparedBaseKey = nil
             preview = nil
+            nativePhotoSize = nil
         }
         do {
+            try await Task.sleep(for: .milliseconds(90))
             let request = try WatermarkReviewPlan.request(for: currentItem,
                                                           configurations: presetStore.configurations)
             if previewPreparation == nil {
@@ -534,6 +673,7 @@ struct WatermarkExportView: View {
             }
             let prepared = try await previewPreparation!.value
             guard !Task.isCancelled else { return }
+            nativePhotoSize = prepared.nativePixelSize
             let baseKey = primaryKey
             if preparedBaseKey != baseKey {
                 previewBase?.cancel()

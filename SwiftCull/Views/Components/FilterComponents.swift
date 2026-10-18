@@ -6,7 +6,7 @@ struct GlassCard<Content: View>: View {
     var body: some View {
         content()
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(11)
+            .padding(12)
             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -21,9 +21,13 @@ struct SectionHeader: View {
     let title: String
 
     var body: some View {
-        Label(title, systemImage: icon)
-            .font(.system(size: 12, weight: .semibold))
-            .foregroundStyle(.secondary)
+        Label {
+            Text(title)
+        } icon: {
+            Image(systemName: icon).frame(width: 16)
+        }
+        .font(.system(size: 12, weight: .semibold))
+        .foregroundStyle(.secondary)
     }
 }
 
@@ -31,6 +35,7 @@ struct FilterChip: View {
     let title: String
     var icon: String? = nil
     let isSelected: Bool
+    var fillsWidth = false
     let action: () -> Void
 
     var body: some View {
@@ -42,9 +47,11 @@ struct FilterChip: View {
                 }
                 Text(title)
                     .font(.system(size: 12, weight: isSelected ? .semibold : .regular))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
+            .padding(.horizontal, fillsWidth ? 4 : 10)
+            .frame(maxWidth: fillsWidth ? .infinity : nil, minHeight: 26)
             .background {
                 Capsule()
                     .fill(isSelected ? Color.accentColor.opacity(0.2) : .clear)
@@ -78,9 +85,10 @@ struct TagFilterChip: View {
                     .frame(width: 8, height: 8)
                 Text(title)
                     .font(.system(size: 12, weight: isSelected ? .semibold : .regular))
+                    .lineLimit(1)
             }
             .padding(.horizontal, 10)
-            .padding(.vertical, 5)
+            .frame(height: 26)
             .background {
                 Capsule()
                     .fill(isSelected ? accentColor.opacity(0.2) : .clear)
@@ -104,14 +112,15 @@ struct SortChip: View {
 
     var body: some View {
         Button(action: action) {
-            VStack(spacing: 3) {
+            HStack(spacing: 6) {
                 Image(systemName: icon)
-                    .font(.system(size: 14))
+                    .font(.system(size: 11))
+                    .frame(width: 14)
                 Text(title)
-                    .font(.system(size: 10, weight: isSelected ? .semibold : .regular))
+                    .font(.system(size: 12, weight: isSelected ? .semibold : .regular))
+                    .lineLimit(1)
             }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, minHeight: 30)
             .padding(.horizontal, 4)
             .background {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)

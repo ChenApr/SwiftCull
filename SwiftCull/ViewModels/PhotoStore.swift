@@ -1431,7 +1431,7 @@ class PhotoStore: ObservableObject {
             var failures: [String] = []
             for (index, request) in requests.enumerated() {
                 do {
-                    try WatermarkService.export(request: request, to: directory)
+                    _ = try autoreleasepool { try WatermarkService.export(request: request, to: directory) }
                     exported += 1
                 } catch {
                     failures.append("\(request.photo.displayName)：\(error.localizedDescription)")
@@ -1448,8 +1448,8 @@ class PhotoStore: ObservableObject {
                 self.isExporting = false
                 self.exportProgress = 0
                 self.exportMessage = failed == 0
-                    ? "已输出 \(completed) 张水印照片到 \(directory.path)"
-                    : "水印导出完成：\(completed) 张成功，\(failed) 张失败。首个错误：\(firstFailure ?? "未知错误")"
+                    ? "已导出 \(completed) 张照片到 \(directory.path)"
+                    : "照片导出完成：\(completed) 张成功，\(failed) 张失败。首个错误：\(firstFailure ?? "未知错误")"
             }
         }
     }

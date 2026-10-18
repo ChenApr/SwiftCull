@@ -31,7 +31,8 @@ final class WatermarkPresetStore: ObservableObject {
         guard !configurations.contains(where: { $0.id != validated.id && $0.name == validated.name }) else {
             throw PresetError.duplicateName
         }
-        guard (0...20).contains(validated.paddingPercent),
+        guard validated.border?.isValid != false,
+              (0...20).contains(validated.paddingPercent),
               (0...35).contains(validated.footerPercent),
               (0...10).contains(validated.cornerRadiusPercent),
               validated.components.count <= 32,

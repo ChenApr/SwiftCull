@@ -60,7 +60,7 @@ struct PhotoDetailView: View {
         store.selectedPhoto
     }
 
-    private let panelPadding: CGFloat = 10
+    private let panelPadding: CGFloat = 12
 
     var body: some View {
         if let photo {
@@ -69,7 +69,7 @@ struct PhotoDetailView: View {
                     imageSection(photo)
                 }
                 ScrollView {
-                    VStack(spacing: 8) {
+                    VStack(spacing: 10) {
                         infoSection(photo)
                         versionSection(photo)
                         exifSection(photo)
@@ -78,6 +78,7 @@ struct PhotoDetailView: View {
                         actionSection(photo)
                     }
                     .padding(panelPadding)
+                    .subtleScrollbars()
                 }
                 .scrollIndicators(.automatic)
             }
@@ -156,7 +157,7 @@ struct PhotoDetailView: View {
                 }
                 .buttonStyle(.plain)
             }
-            .padding(.horizontal, 10)
+            .padding(.horizontal, panelPadding)
             .padding(.vertical, 7)
             .background(.bar)
             .overlay(alignment: .top) {
@@ -385,7 +386,7 @@ struct PhotoDetailView: View {
                     Button {
                         watermarkSelection = WatermarkPhotoSelection(photos: [photo])
                     } label: {
-                        actionLabel("单张加水印并导出…", systemImage: "photo.badge.plus")
+                        actionLabel("边框与水印…", systemImage: "photo.badge.plus")
                     }
                     .buttonStyle(InspectorActionButtonStyle())
                     .disabled(store.isExporting)
@@ -434,7 +435,7 @@ struct PhotoDetailView: View {
     private func detailRow<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             Text(title)
-                .font(.caption2.weight(.medium))
+                .font(.caption.weight(.medium))
                 .foregroundStyle(.secondary)
                 .frame(width: 50, alignment: .leading)
             Spacer(minLength: 6)

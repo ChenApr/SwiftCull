@@ -17,6 +17,7 @@ struct WatermarkServiceSmoke {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
+        try await PhotoBorderSmoke.run(in: directory)
 
         for (width, height) in [(1200, 800), (800, 1200)] {
             let input = directory.appendingPathComponent("source-\(width)x\(height).jpg")

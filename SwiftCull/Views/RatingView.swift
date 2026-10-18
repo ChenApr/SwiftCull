@@ -72,6 +72,7 @@ struct TagChip: View {
 
             Text(finderTag?.displayName ?? tag)
                 .font(.caption2.weight(.medium))
+                .lineLimit(1)
 
             Button {
                 onRemove()

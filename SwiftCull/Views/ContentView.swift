@@ -138,9 +138,7 @@ struct ContentView: View {
             PhotoDetailView(showsPreview: store.viewMode == .grid)
                 .safeAreaInset(edge: .top, spacing: 0) {
                     HStack {
-                        Label("当前照片详情", systemImage: "info.circle")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(.secondary)
+                        SectionHeader(icon: "info.circle", title: "当前照片详情")
                         Spacer()
                         Button {
                             store.isInspectorVisible = false
@@ -152,7 +150,7 @@ struct ContentView: View {
                         .buttonStyle(.plain)
                         .help("隐藏详情")
                     }
-                    .padding(.horizontal, 14)
+                    .padding(.horizontal, 12)
                     .padding(.vertical, 8)
                     .background(.bar)
                 }

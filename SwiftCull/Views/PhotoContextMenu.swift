@@ -125,7 +125,7 @@ struct PhotoContextMenu: View {
         .disabled(sourceFiles.isEmpty || store.isExporting)
 
         Button { onWatermark(watermarkable) } label: {
-            Label(isBatch ? "所选 \(watermarkable.count) 张加水印并导出…" : "单张加水印并导出…",
+            Label(isBatch ? "所选 \(watermarkable.count) 张添加边框 / 水印…" : "边框与水印…",
                   systemImage: "photo.badge.plus")
         }
         .disabled(watermarkable.isEmpty || store.isExporting)

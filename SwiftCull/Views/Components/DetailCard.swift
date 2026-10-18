@@ -6,22 +6,18 @@ struct DetailCard<Content: View>: View {
     @ViewBuilder let content: Content
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            Label(title, systemImage: systemImage)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.primary)
-                .symbolRenderingMode(.hierarchical)
+        VStack(alignment: .leading, spacing: 10) {
+            SectionHeader(icon: systemImage, title: title)
 
             content
         }
-        .padding(.horizontal, 11)
-        .padding(.vertical, 9)
+        .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(.white.opacity(0.18), lineWidth: 0.5)
+                    .strokeBorder(Color.primary.opacity(0.05), lineWidth: 0.5)
         )
-        .shadow(color: .black.opacity(0.035), radius: 6, x: 0, y: 2)
+        .shadow(color: .black.opacity(0.03), radius: 1.5, y: 1)
     }
 }

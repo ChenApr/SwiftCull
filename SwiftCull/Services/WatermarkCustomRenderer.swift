@@ -7,6 +7,7 @@ enum WatermarkCustomRenderer {
         let path: String
         let semi: SemiWatermarkRenderer.PreparedSource
         let exif: PhotoExifInfo
+        let nativePixelSize: CGSize
     }
 
     static func prepare(photo: PhotoEntry, sourcePath: String? = nil,
@@ -16,8 +17,12 @@ enum WatermarkCustomRenderer {
         }
         let semi = try SemiWatermarkRenderer.prepare(photo: photo, sourcePath: path,
                                                      maxPixelSize: maxPixelSize)
+        let dimensions = try CropImageService.orientedDimensions(path: path)
+        let crop = photo.cropRect?.normalized ?? .full
+        let size = CGSize(width: max(1, Int((Double(dimensions.width) * crop.width).rounded(.down))),
+                          height: max(1, Int((Double(dimensions.height) * crop.height).rounded(.down))))
         return PreparedSource(path: path, semi: semi,
-                              exif: PhotoExifInfo.load(from: path, fallbackDate: photo.fileDate))
+                              exif: PhotoExifInfo.load(from: path, fallbackDate: photo.fileDate), nativePixelSize: size)
     }
 
     static func render(photo: PhotoEntry, configuration: WatermarkConfiguration,
@@ -33,6 +38,10 @@ enum WatermarkCustomRenderer {
 
     static func renderCanvas(prepared: PreparedSource,
                              configuration: WatermarkConfiguration) throws -> SemiWatermarkRenderer.RenderedCanvas {
+        if let border = configuration.border {
+            let base = try PhotoBorderRenderer.render(image: prepared.semi.image, configuration: border)
+            return try overlay(prepared: prepared, configurations: [configuration], on: base)
+        }
         if configuration.templateLayout == true {
             return try SemiWatermarkRenderer.renderCanvas(prepared: prepared.semi,
                                                           preset: configuration.basePreset,
@@ -107,7 +116,7 @@ enum WatermarkCustomRenderer {
 
     static func overlay(prepared: PreparedSource, configurations: [WatermarkConfiguration],
                         on base: SemiWatermarkRenderer.RenderedCanvas) throws -> SemiWatermarkRenderer.RenderedCanvas {
-        guard !configurations.isEmpty else { return base }
+        guard configurations.contains(where: { !$0.components.isEmpty }) else { return base }
         let source = base.bitmap
         let canvas = CGRect(x: 0, y: 0, width: source.pixelsWide, height: source.pixelsHigh)
         guard let bitmap = NSBitmapImageRep(

@@ -4,6 +4,8 @@ struct FilterSidebar: View {
     @EnvironmentObject var store: PhotoStore
     @State private var showingWatermarkExport = false
 
+    @State private var filterContentWidth: CGFloat?
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             ScrollView {
@@ -19,11 +21,24 @@ struct FilterSidebar: View {
                 .padding(.top, 12)
                 .padding(.bottom, 16)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .subtleScrollbars(hidden: true)
+                .background {
+                    GeometryReader { geometry in
+                        Color.clear
+                            .onAppear { filterContentWidth = geometry.size.width }
+                            .onChange(of: geometry.size.width) { _, width in filterContentWidth = width }
+                    }
+                }
             }
+            .scrollIndicators(.hidden)
 
+            Divider()
             exportSection
+                .padding(.top, 12)
                 .padding(.horizontal, 12)
                 .padding(.bottom, 12)
+                // Match the scroll content even when macOS reserves a scrollbar gutter.
+                .frame(width: filterContentWidth, alignment: .leading)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .sheet(isPresented: $showingWatermarkExport) {
@@ -71,32 +86,39 @@ struct FilterSidebar: View {
             VStack(alignment: .leading, spacing: 10) {
                 SectionHeader(icon: "star", title: "评分")
 
-                FlowLayout(spacing: 6) {
-                    FilterChip(
-                        title: "全部",
-                        icon: "line.3.horizontal.decrease",
-                        isSelected: store.filterOptions.ratingFilter == .all
-                    ) {
-                        store.filterOptions.ratingFilter = .all
-                        scheduleFilter()
-                    }
-
-                    FilterChip(
-                        title: "未评分",
-                        icon: "star.slash",
-                        isSelected: store.filterOptions.ratingFilter == .unrated
-                    ) {
-                        store.filterOptions.ratingFilter = .unrated
-                        scheduleFilter()
-                    }
-
-                    ForEach([RatingFilter.one, .two, .three, .four, .five], id: \.self) { filter in
+                VStack(spacing: 6) {
+                    HStack(spacing: 6) {
                         FilterChip(
-                            title: filter.displayName,
-                            isSelected: store.filterOptions.ratingFilter == filter
+                            title: "全部",
+                            icon: "line.3.horizontal.decrease",
+                            isSelected: store.filterOptions.ratingFilter == .all,
+                            fillsWidth: true
                         ) {
-                            store.filterOptions.ratingFilter = filter
+                            store.filterOptions.ratingFilter = .all
                             scheduleFilter()
+                        }
+
+                        FilterChip(
+                            title: "未评分",
+                            icon: "star.slash",
+                            isSelected: store.filterOptions.ratingFilter == .unrated,
+                            fillsWidth: true
+                        ) {
+                            store.filterOptions.ratingFilter = .unrated
+                            scheduleFilter()
+                        }
+                    }
+
+                    HStack(spacing: 6) {
+                        ForEach([RatingFilter.one, .two, .three, .four, .five], id: \.self) { filter in
+                            FilterChip(
+                                title: filter.displayName,
+                                isSelected: store.filterOptions.ratingFilter == filter,
+                                fillsWidth: true
+                            ) {
+                                store.filterOptions.ratingFilter = filter
+                                scheduleFilter()
+                            }
                         }
                     }
                 }
@@ -151,16 +173,18 @@ struct FilterSidebar: View {
             VStack(alignment: .leading, spacing: 10) {
                 SectionHeader(icon: "doc", title: "文件类型")
 
-                FlowLayout(spacing: 6) {
+                LazyVGrid(columns: [GridItem(.flexible(), spacing: 6), GridItem(.flexible(), spacing: 6)], spacing: 6) {
                     ForEach(FileTypeFilter.allCases) { filter in
                         FilterChip(
-                            title: filter.displayName,
+                            title: filter == .jpgAndNef ? "RAW+JPG" : filter.displayName,
                             icon: fileTypeIcon(filter),
-                            isSelected: store.filterOptions.fileTypeFilter == filter
+                            isSelected: store.filterOptions.fileTypeFilter == filter,
+                            fillsWidth: true
                         ) {
                             store.filterOptions.fileTypeFilter = filter
                             scheduleFilter()
                         }
+                        .help(filter.displayName)
                     }
                 }
             }
@@ -213,29 +237,11 @@ struct FilterSidebar: View {
     private var presetButtons: some View {
         FlowLayout(spacing: 6) {
             ForEach([DatePreset.today, .yesterday, .last7Days, .last30Days, .custom], id: \.self) { preset in
-                Button {
+                FilterChip(title: preset.displayName,
+                           isSelected: store.filterOptions.activePreset == preset) {
                     applyPreset(preset)
                     scheduleFilter()
-                } label: {
-                    Text(preset.displayName)
-                        .font(.system(size: 11, weight: store.filterOptions.activePreset == preset ? .semibold : .regular))
-                        .padding(.horizontal, 9)
-                        .padding(.vertical, 4)
-                        .background(
-                            Capsule().fill(store.filterOptions.activePreset == preset
-                                           ? Color.accentColor.opacity(0.15)
-                                           : Color.clear)
-                        )
-                        .overlay(
-                            Capsule().strokeBorder(
-                                store.filterOptions.activePreset == preset
-                                ? Color.accentColor.opacity(0.4)
-                                : Color.secondary.opacity(0.2),
-                                lineWidth: 0.5
-                            )
-                        )
                 }
-                .buttonStyle(.plain)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -244,17 +250,16 @@ struct FilterSidebar: View {
     // MARK: - 日期输入
 
     private var dateInputRow: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            VStack(alignment: .leading, spacing: 2) {
+        VStack(spacing: 8) {
+            HStack(spacing: 8) {
                 Text("开始")
-                    .font(.system(size: 9))
-                    .foregroundStyle(.tertiary)
+                    .font(.caption).foregroundStyle(.secondary)
+                    .frame(width: 28, alignment: .leading)
                 DatePickerTextField(
                     date: Binding(
                         get: { store.filterOptions.startDate ?? Calendar.current.startOfDay(for: Date()) },
                         set: { newDate in
                             store.filterOptions.startDate = newDate
-                            // 自动联动：结束日期不能早于开始日期
                             if let end = store.filterOptions.endDate, end < newDate {
                                 store.filterOptions.endDate = newDate
                             }
@@ -266,16 +271,15 @@ struct FilterSidebar: View {
                 )
             }
 
-            VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 8) {
                 Text("结束")
-                    .font(.system(size: 9))
-                    .foregroundStyle(.tertiary)
+                    .font(.caption).foregroundStyle(.secondary)
+                    .frame(width: 28, alignment: .leading)
                 DatePickerTextField(
                     date: Binding(
                         get: { store.filterOptions.endDate ?? Date() },
                         set: { newDate in
                             store.filterOptions.endDate = newDate
-                            // 自动联动：开始日期不能晚于结束日期
                             if let start = store.filterOptions.startDate, start > newDate {
                                 store.filterOptions.startDate = newDate
                             }
@@ -364,7 +368,7 @@ struct FilterSidebar: View {
             VStack(alignment: .leading, spacing: 10) {
                 SectionHeader(icon: "arrow.up.arrow.down", title: "排序")
 
-                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 6) {
+                LazyVGrid(columns: [GridItem(.flexible(), spacing: 6), GridItem(.flexible(), spacing: 6)], spacing: 6) {
                     ForEach(SortOption.allCases) { option in
                         SortChip(
                             title: option.displayName,
@@ -398,9 +402,9 @@ struct FilterSidebar: View {
 
                     Spacer()
 
-                    Text(store.filterOptions.sortAscending ? "从小到大 / 从旧到新" : "从大到小 / 从新到旧")
+                    Text(sortDirectionHint)
                         .font(.caption2)
-                        .foregroundStyle(.quaternary)
+                        .foregroundStyle(.secondary)
                 }
             }
         }
@@ -409,6 +413,16 @@ struct FilterSidebar: View {
         }
         .onChange(of: store.filterOptions.sortAscending) { _, _ in
             scheduleFilter()
+        }
+    }
+
+    private var sortDirectionHint: String {
+        let ascending = store.filterOptions.sortAscending
+        switch store.filterOptions.sortOption {
+        case .date: return ascending ? "旧 → 新" : "新 → 旧"
+        case .name: return ascending ? "A → Z" : "Z → A"
+        case .rating: return ascending ? "低 → 高" : "高 → 低"
+        case .size: return ascending ? "小 → 大" : "大 → 小"
         }
     }
 
@@ -437,25 +451,14 @@ struct FilterSidebar: View {
             VStack(alignment: .leading, spacing: 10) {
                 SectionHeader(icon: "square.and.arrow.up", title: "导出")
 
-                Text("范围：当前筛选结果（全部）")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("当前筛选结果 · \(store.photoCount) 张")
+                    if store.photoCount > 0 { Text(store.totalSize) }
+                }
+                .font(.caption).foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
                 VStack(spacing: 6) {
-                    HStack(spacing: 6) {
-                        Text("\(store.photoCount) 张照片")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
-
-                        if store.photoCount > 0 {
-                            Text("·")
-                                .foregroundStyle(.tertiary)
-                            Text(store.totalSize)
-                                .font(.system(size: 11))
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-
                     Button {
                         store.exportFilteredPhotos()
                     } label: {
@@ -492,10 +495,13 @@ struct FilterSidebar: View {
                     Button {
                         showingWatermarkExport = true
                     } label: {
-                        Label("全部筛选照片加水印并导出…", systemImage: "photo.badge.plus")
-                            .frame(maxWidth: .infinity)
+                        Label("批量边框与水印…", systemImage: "photo.artframe")
+                            .font(.system(size: 12, weight: .medium))
+                            .frame(maxWidth: .infinity, minHeight: 32)
+                            .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 10))
+                            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5))
                     }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.plain)
                     .disabled(store.isExporting || !store.filteredPhotos.contains(where: { $0.hasJpg || $0.hasNef }))
                 }
             }
@@ -528,11 +534,11 @@ private struct DatePickerTextField: View {
     }()
 
     var body: some View {
-        HStack(spacing: 2) {
+        HStack(spacing: 6) {
             TextField("YYYY/MM/DD", text: $text)
                 .textFieldStyle(.roundedBorder)
                 .font(.system(size: 11, design: .monospaced))
-                .frame(width: 90)
+                .frame(maxWidth: .infinity)
                 .foregroundStyle(isValid ? Color.primary : Color.red)
                 .onChange(of: text) { _, newValue in
                     parseAndApply(newValue)
@@ -542,8 +548,9 @@ private struct DatePickerTextField: View {
                 showCalendar.toggle()
             } label: {
                 Image(systemName: "calendar")
-                    .font(.system(size: 10))
+                    .font(.system(size: 12))
                     .foregroundStyle(.secondary)
+                    .frame(width: 22, height: 24)
             }
             .buttonStyle(.borderless)
             .popover(isPresented: $showCalendar) {

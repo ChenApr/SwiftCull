@@ -3,10 +3,10 @@ import SwiftUI
 struct FlowLayout: Layout {
     var spacing: CGFloat = 4
 
-    typealias Cache = (size: CGSize, positions: [CGPoint])
+    typealias Cache = (size: CGSize, positions: [CGPoint], sizes: [CGSize])
 
     func makeCache(subviews: Subviews) -> Cache {
-        (CGSize.zero, [])
+        (CGSize.zero, [], [])
     }
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) -> CGSize {
@@ -21,31 +21,34 @@ struct FlowLayout: Layout {
                              subviews: subviews)
         cache = result
         for (index, position) in result.positions.enumerated() {
-            subviews[index].place(at: CGPoint(x: bounds.minX + position.x, y: bounds.minY + position.y), proposal: .unspecified)
+            subviews[index].place(at: CGPoint(x: bounds.minX + position.x, y: bounds.minY + position.y),
+                                 proposal: ProposedViewSize(result.sizes[index]))
         }
     }
 
-    private func arrange(proposal: ProposedViewSize, subviews: Subviews) -> (size: CGSize, positions: [CGPoint]) {
+    private func arrange(proposal: ProposedViewSize, subviews: Subviews) -> Cache {
         let maxWidth = max(1, proposal.width ?? subviews.map { $0.sizeThatFits(.unspecified).width }.max() ?? 1)
         var positions: [CGPoint] = []
+        var sizes: [CGSize] = []
         var currentX: CGFloat = 0
         var currentY: CGFloat = 0
         var rowHeight: CGFloat = 0
         var maxX: CGFloat = 0
 
         for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
+            let size = subview.sizeThatFits(ProposedViewSize(width: maxWidth, height: nil))
             if currentX + size.width > maxWidth && currentX > 0 {
                 currentX = 0
                 currentY += rowHeight + spacing
                 rowHeight = 0
             }
             positions.append(CGPoint(x: currentX, y: currentY))
+            sizes.append(size)
             rowHeight = max(rowHeight, size.height)
             currentX += size.width + spacing
             maxX = max(maxX, currentX - spacing)
         }
 
-        return (CGSize(width: min(maxX, maxWidth), height: currentY + rowHeight), positions)
+        return (CGSize(width: min(maxX, maxWidth), height: currentY + rowHeight), positions, sizes)
     }
 }

@@ -30,7 +30,7 @@ struct WatermarkPresetEditorView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("编辑水印预设").font(.title2.bold())
+                Text(draft.border == nil ? "编辑水印预设" : "编辑边框预设").font(.headline)
                 Spacer()
                 Button("取消") { dismiss() }
                 Button("保存预设") { save() }
@@ -52,6 +52,7 @@ struct WatermarkPresetEditorView: View {
                 .frame(width: 385)
             }
         }
+        .background(Color(nsColor: .windowBackgroundColor))
         .frame(width: 1050, height: 720)
         .task(id: draft) { await loadPreview() }
         .alert("无法保存预设", isPresented: Binding(
@@ -84,7 +85,7 @@ struct WatermarkPresetEditorView: View {
         GroupBox("预设") {
             VStack(alignment: .leading) {
                 TextField("名称", text: $draft.name)
-                Text("基于：\(draft.basePreset.rawValue)")
+                Text(draft.border == nil ? "基于：\(draft.basePreset.rawValue)" : "居中边框 · 完整保留照片")
                     .font(.caption).foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -95,7 +96,12 @@ struct WatermarkPresetEditorView: View {
     private var canvasSection: some View {
         GroupBox("画布与照片") {
             VStack(alignment: .leading, spacing: 12) {
-                if draft.templateLayout == true &&
+                if draft.border != nil {
+                    PhotoBorderControls(configuration: Binding(
+                        get: { draft.border ?? PhotoBorderConfiguration() },
+                        set: { draft.border = $0 }
+                    ))
+                } else if draft.templateLayout == true &&
                     (draft.basePreset.layout == .cornerParameters || draft.basePreset.layout == .folderAndDate) {
                     Text("此模板直接在照片上叠加组件，画布尺寸与原图一致。")
                         .font(.caption).foregroundStyle(.secondary)

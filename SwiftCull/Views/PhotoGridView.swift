@@ -180,6 +180,7 @@ struct PhotoGridView: View {
 
             selectionMenu
             groupingPicker(width: 148)
+                .labelsHidden()
         }
     }
 
@@ -305,7 +306,7 @@ struct PhotoGridView: View {
                 Button {
                     selectedWatermarkSelection = WatermarkPhotoSelection(photos: watermarkableSelectedPhotos)
                 } label: {
-                    Label("所选 \(watermarkableSelectedPhotos.count) 张加水印并导出…", systemImage: "photo.badge.plus")
+                    Label("所选 \(watermarkableSelectedPhotos.count) 张添加边框 / 水印…", systemImage: "photo.badge.plus")
                 }
                 .disabled(store.isExporting || watermarkableSelectedPhotos.isEmpty)
             }
@@ -318,7 +319,7 @@ struct PhotoGridView: View {
                 Menu {
                     Button("导出所选照片…") { store.exportSelectedPhotos() }
                         .disabled(store.selectedCount == 0 || store.isExporting)
-                    Button("所选 \(watermarkableSelectedPhotos.count) 张加水印并导出…") {
+                    Button("所选 \(watermarkableSelectedPhotos.count) 张添加边框 / 水印…") {
                         selectedWatermarkSelection = WatermarkPhotoSelection(photos: watermarkableSelectedPhotos)
                     }
                     .disabled(store.isExporting || watermarkableSelectedPhotos.isEmpty)
@@ -823,6 +824,7 @@ struct PhotoGridContent: View {
                             }
                         }
                     }
+                    .subtleScrollbars()
                     .background {
                         // One measurement for the grid, including the actual space
                         // left by scrollbars. Keyboard navigation needs only this count.
