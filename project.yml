@@ -24,8 +24,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.swiftcull.app
-        MARKETING_VERSION: "4.0.0"
-        CURRENT_PROJECT_VERSION: "400"
+        MARKETING_VERSION: "4.1.0"
+        CURRENT_PROJECT_VERSION: "410"
         INFOPLIST_KEY_CFBundleDisplayName: "SwiftCull"
         INFOPLIST_KEY_LSApplicationCategoryType: "public.app-category.photography"
         INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription: "用于将你制作的实况照片添加到系统照片图库。"
