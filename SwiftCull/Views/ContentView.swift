@@ -4,6 +4,7 @@ import AppKit
 struct ContentView: View {
     @EnvironmentObject var store: PhotoStore
     @State private var availableWidth: CGFloat = 1200
+    @State private var isFolderDropTargeted = false
 
     private let sidebarBreakpoint: CGFloat = 1120
     private let inspectorBreakpoint: CGFloat = 800
@@ -28,6 +29,27 @@ struct ContentView: View {
             .frame(width: geometry.size.width, height: geometry.size.height)
             .onAppear { adapt(to: geometry.size.width) }
             .onChange(of: geometry.size.width) { _, width in adapt(to: width) }
+        }
+        .dropDestination(for: URL.self) { urls, _ in
+            store.openFolder(from: urls)
+        } isTargeted: { targeted in
+            isFolderDropTargeted = targeted
+        }
+        .overlay {
+            if isFolderDropTargeted {
+                RoundedRectangle(cornerRadius: 12)
+                    .strokeBorder(Color.accentColor, style: StrokeStyle(lineWidth: 2, dash: [8, 5]))
+                    .background(Color.accentColor.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
+                    .overlay {
+                        Label("松开以打开文件夹", systemImage: "folder.badge.plus")
+                            .font(.headline)
+                            .padding(.horizontal, 20)
+                            .padding(.vertical, 14)
+                            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+                    }
+                    .padding(8)
+                    .allowsHitTesting(false)
+            }
         }
         .alert("确认删除", isPresented: $store.showingDeleteConfirmation) {
             Button("取消", role: .cancel) {

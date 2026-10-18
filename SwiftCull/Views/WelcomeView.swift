@@ -29,7 +29,7 @@ struct WelcomeView: View {
                         .truncationMode(.middle)
                         .multilineTextAlignment(.center)
                 } else {
-                    Text("打开一个包含照片的文件夹开始浏览")
+                    Text("拖入照片文件夹，或点击下方按钮开始浏览")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
@@ -54,10 +54,7 @@ struct WelcomeView: View {
 
                     ForEach(store.detectedVolumes) { volume in
                         Button {
-                            store.sourcePath = volume.path
-                            Task {
-                                await store.loadPhotos()
-                            }
+                            store.openFolder(from: [URL(fileURLWithPath: volume.path)])
                         } label: {
                             HStack(spacing: 10) {
                                 Image(systemName: volume.icon)

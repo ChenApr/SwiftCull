@@ -7,19 +7,17 @@
 浏览、标记、筛选、导出，让选片更专注。
 
 <p align="center">
-  <a href="https://github.com/SAN-SHIa/SwiftCull/releases/latest"><img src="./imgs/badges/release.svg" alt="下载最新版本" /></a>
-  <img src="./imgs/badges/macos.svg" alt="系统要求：macOS 14.0 及以上" />
+  <a href="https://github.com/SAN-SHIa/SwiftCull/releases/latest"><img src="./assets/badges/release.svg" alt="下载最新版本" /></a>
+  <img src="./assets/badges/macos.svg" alt="系统要求：macOS 14.0 及以上" />
   <a href="https://github.com/SAN-SHIa/SwiftCull/actions/workflows/build.yml"><img src="https://github.com/SAN-SHIa/SwiftCull/actions/workflows/build.yml/badge.svg" alt="构建状态" /></a>
-  <a href="https://github.com/SAN-SHIa/SwiftCull/blob/main/LICENSE"><img src="./imgs/badges/license.svg" alt="项目代码许可证：MIT" /></a>
-  <a href="https://github.com/SAN-SHIa/SwiftCull/stargazers"><img src="./imgs/badges/stars.svg" alt="GitHub Stars" /></a>
-  <img src="./imgs/badges/views-history.svg" alt="历史访问次数：299" />
+  <a href="https://github.com/SAN-SHIa/SwiftCull/blob/main/LICENSE"><img src="./assets/badges/license.svg" alt="项目代码许可证：MIT" /></a>
 </p>
 
 **[下载最新版本](https://github.com/SAN-SHIa/SwiftCull/releases/latest) · [版本记录](https://github.com/SAN-SHIa/SwiftCull/releases) · [问题反馈](https://github.com/SAN-SHIa/SwiftCull/issues)**
 
-[快速上手](#快速上手) · [主要功能](#主要功能) · [界面预览](#界面预览) · [快捷键与手势](#快捷键与手势) · [开发指南](#开发指南)
+[快速上手](#快速上手) · [主要功能](#主要功能) · [功能展示](#功能展示) · [快捷键与手势](#快捷键与手势) · [开发指南](#开发指南)
 
-<img src="./imgs/post.png" width="960" alt="SwiftCull：macOS 原生照片浏览与筛选工具" />
+<a href="./assets/pics/post.png"><img src="./assets/pics/previews/post.webp" width="880" alt="SwiftCull：macOS 原生照片浏览与筛选工具" /></a>
 
 </div>
 
@@ -40,7 +38,7 @@
 
 ## 快速上手
 
-1. **打开照片文件夹** — 按 `⌘O` 选择目录，在网格中浏览照片；按 `E` 切换大图，或按空格使用 Quick Look 预览。
+1. **打开照片文件夹** — 从桌面或 Finder 将一个文件夹拖入应用窗口，或按 `⌘O` 选择目录；按 `E` 切换大图，或按空格使用 Quick Look 预览。
 2. **标记需要的照片** — 按 `1`–`5` 评分，按 `0` 清除评分，也可使用 Finder 标签。拖拽框选可批量标注，完成后点击“完成”或按 `Q` 保存。
 3. **筛选并导出** — 按评分、标签、文件类型等缩小范围，再复制或导出所选照片；需要时添加裁剪或水印。
 
@@ -57,11 +55,104 @@
 | 边框与水印 | 支持等宽留白及 6 种画布比例，可调节边框宽度与颜色；保留 15 种水印预设、文字和 Logo 组件，支持保存预设、逐张调整及批量导出。 |
 | 视频与实况照片 | 支持视频播放、跳转、逐帧查看及音量控制；可选取 0.5–3 秒片段和封面，导出 HEIC + MOV，或添加到系统“照片”。 |
 
-### 边框与水印导出
+---
 
-从照片右键菜单或左栏的“批量边框与水印…”进入，选择“边框”或“水印”并实时预览。边框将完整照片居中放入扩展画布，不裁切照片，导出时保留照片像素尺寸。
+## 功能展示
 
-底部照片条可切换当前照片及勾选导出范围。调整默认只作用于当前照片；使用“将当前样式应用到已勾选的 N 张”可统一样式，未勾选照片不会被修改。需要文字或 Logo 时展开“进阶”，常用设置可保存为预设。最后选择目录导出，原文件保持不变。
+从浏览、筛选到导出，常用操作集中在同一窗口。点击截图可查看原图。
+
+### 浏览与外观
+
+左侧筛选、中央网格、右侧照片详情，可按需要收起两侧面板。支持浅色与深色外观。
+
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <a href="./assets/pics/light.png"><img src="./assets/pics/previews/light.webp" width="480" alt="浅色界面：左侧筛选与中央照片网格" /></a><br />
+      <b>浅色模式</b><br />
+      <sub>在网格中浏览照片，按月或按日分组。</sub>
+    </td>
+    <td align="center" width="50%">
+      <a href="./assets/pics/dark.png"><img src="./assets/pics/previews/dark.webp" width="480" alt="深色界面：照片网格与筛选侧栏" /></a><br />
+      <b>深色模式</b><br />
+      <sub>保留相同布局与操作，适应不同查看环境。</sub>
+    </td>
+  </tr>
+</table>
+
+### 筛选与标记
+
+先按文件名、日期、评分、标签或文件类型缩小范围，再逐张查看照片与拍摄信息。
+
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <a href="./assets/pics/filter.png"><img src="./assets/pics/previews/filter.webp" width="480" alt="筛选界面：按 Finder 标签筛选后的照片网格" /></a><br />
+      <b>组合筛选</b><br />
+      <sub>在左栏组合筛选条件，按当前结果导出。</sub>
+    </td>
+    <td align="center" width="50%">
+      <a href="./assets/pics/tag.png"><img src="./assets/pics/previews/tag.webp" width="480" alt="大图浏览：右侧星级评分与彩色 Finder 标签" /></a><br />
+      <b>评分与标签</b><br />
+      <sub>支持单张标记与框选批量标注，Finder 标签同步至关联文件。</sub>
+    </td>
+  </tr>
+</table>
+
+### 大图与实况照片
+
+按 `E` 切换大图，结合 EXIF 信息查看细节；有配对视频的照片可继续制作实况照片。
+
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <a href="./assets/pics/photo-info.png"><img src="./assets/pics/previews/photo-info.webp" width="480" alt="照片详情：大图、相机镜头信息与 EXIF 拍摄参数" /></a><br />
+      <b>大图与拍摄信息</b><br />
+      <sub>查看文件信息、相机、镜头、焦距、光圈、快门与 ISO。</sub>
+    </td>
+    <td align="center" width="50%">
+      <a href="./assets/pics/video-live.png"><img src="./assets/pics/previews/video-live.webp" width="480" alt="实况照片编辑器：视频预览、时间轴、片段选择与封面设置" /></a><br />
+      <b>视频与实况照片</b><br />
+      <sub>选取 0.5–3 秒视频片段与封面，导出 HEIC + MOV 或添加到系统“照片”。</sub>
+    </td>
+  </tr>
+</table>
+
+### 边框与水印
+
+从照片右键菜单或左栏的“批量边框与水印…”进入。调整当前照片、检查预览，再选择导出位置。
+
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <a href="./assets/pics/frame.png"><img src="./assets/pics/previews/frame.webp" width="480" alt="边框编辑：完整照片居中留白，右侧调整比例、宽度与颜色" /></a><br />
+      <b>居中边框</b><br />
+      <sub>等宽留白与 6 种画布比例；调节宽度、颜色，完整保留照片。</sub>
+    </td>
+    <td align="center" width="50%">
+      <a href="./assets/pics/watermark.png"><img src="./assets/pics/previews/watermark.webp" width="480" alt="水印编辑：照片预览、预设选择与拍摄信息水印" /></a><br />
+      <b>水印预设</b><br />
+      <sub>15 种横竖版模板，可叠加文字与 Logo，并保存常用预设。</sub>
+    </td>
+  </tr>
+</table>
+
+底部照片条可切换当前照片及勾选导出范围。**调整默认只作用于当前照片**；点击“将当前样式应用到已勾选的 N 张”可统一样式。未勾选照片不会被修改，导出 JPEG 时保留原文件。
+
+<details>
+<summary><b>打开文件夹与快速访问</b></summary>
+
+从桌面或 Finder 将一个照片文件夹拖入窗口，或按 `⌘O` 选择目录。欢迎页也提供检测到的存储位置，便于快速访问。
+
+<p align="center">
+  <a href="./assets/pics/welcom-page.png"><img src="./assets/pics/previews/welcom-page.webp" width="880" alt="SwiftCull 欢迎页：打开文件夹与快速访问存储位置" /></a>
+</p>
+
+</details>
+
+---
+
+## 文件与版本
 
 ### 文件格式
 
@@ -88,21 +179,6 @@ RAW 解码和视频播放取决于 macOS 对相应相机格式及编码的支持
 </details>
 
 ---
-
-## 界面预览
-
-<table>
-  <tr>
-    <td align="center" width="50%">
-      <img src="./imgs/dark.jpeg" width="400" alt="SwiftCull 深色模式" /><br />
-      <sub><b>深色模式</b></sub>
-    </td>
-    <td align="center" width="50%">
-      <img src="./imgs/light.jpeg" width="400" alt="SwiftCull 浅色模式" /><br />
-      <sub><b>浅色模式</b></sub>
-    </td>
-  </tr>
-</table>
 
 ## 快捷键与手势
 

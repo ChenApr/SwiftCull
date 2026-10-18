@@ -5,12 +5,12 @@ import UniformTypeIdentifiers
 @main
 struct DataIntegritySmoke {
     @MainActor
-    static func eventually(_ predicate: () -> Bool) async throws {
+    static func eventually(_ predicate: () -> Bool, file: StaticString = #file, line: UInt = #line) async throws {
         for _ in 0..<500 {
             if predicate() { return }
             try await Task.sleep(for: .milliseconds(10))
         }
-        preconditionFailure("Timed out waiting for file operation")
+        preconditionFailure("Timed out waiting for file operation", file: file, line: line)
     }
 
     static func photo(_ folder: URL, name: String = "same", jpg: Bool = true,
@@ -58,6 +58,39 @@ struct DataIntegritySmoke {
         try writeJPEG(b.appendingPathComponent("same.jpg"))
         defaults.set(5, forKey: "com.photofilter.rating.same")
         let store = PhotoStore(ratingService: ratings, projectMetadata: metadata)
+
+        // Folder drops use the same loader as the picker, without losing the current
+        // folder when a file, URL, missing path, or multiple folders are dropped.
+        let aImagePath = try fm.contentsOfDirectory(at: a, includingPropertiesForKeys: nil).first!.path
+        let bImagePath = try fm.contentsOfDirectory(at: b, includingPropertiesForKeys: nil).first!.path
+        precondition(store.openFolder(from: [a]))
+        try await eventually { !store.isLoading && !store.isEnriching && store.photos.first?.jpgPath == aImagePath }
+        let package = root.appendingPathComponent("Example.app")
+        try fm.createDirectory(at: package, withIntermediateDirectories: true)
+        for urls in [[], [a, b], [a.appendingPathComponent("same.jpg")],
+                     [root.appendingPathComponent("missing")], [package],
+                     [URL(string: "https://example.com/photos")!]] {
+            precondition(!store.openFolder(from: urls))
+            precondition(store.sourcePath == a.path && store.photos.count == 1)
+            precondition(store.exportMessage != nil)
+            store.exportMessage = nil
+        }
+        let unicodeFolder = root.appendingPathComponent("桌面照片 空格 #1")
+        try writeJPEG(unicodeFolder.appendingPathComponent("same.jpg"))
+        let unicodeImagePath = try fm.contentsOfDirectory(at: unicodeFolder, includingPropertiesForKeys: nil).first!.path
+        precondition(store.openFolder(from: [unicodeFolder]))
+        try await eventually { !store.isLoading && !store.isEnriching && store.photos.first?.jpgPath == unicodeImagePath }
+        let emptyFolder = root.appendingPathComponent("Empty")
+        try fm.createDirectory(at: emptyFolder, withIntermediateDirectories: true)
+        precondition(store.openFolder(from: [emptyFolder]))
+        try await eventually { !store.isLoading && !store.isEnriching && store.photos.isEmpty }
+        precondition(store.errorMessage == nil)
+        precondition(store.openFolder(from: [a]))
+        precondition(store.openFolder(from: [b]))
+        try await eventually { !store.isLoading && !store.isEnriching && store.photos.first?.jpgPath == bImagePath }
+        precondition(store.sourcePath == b.path)
+        print("Folder opening passed: valid/empty/Unicode folders, invalid drops preserve state, latest folder wins")
+
         store.sourcePath = a.path
         await store.loadPhotos()
         precondition(store.photos[0].rating == 0, "Ambiguous legacy keys must not contaminate a folder")

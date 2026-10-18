@@ -1294,11 +1294,25 @@ class PhotoStore: ObservableObject {
         panel.directoryURL = URL(fileURLWithPath: sourcePath)
 
         if panel.runModal() == .OK, let url = panel.url {
-            sourcePath = url.path
-            Task {
-                await loadPhotos()
-            }
+            openFolder(from: [url])
         }
+    }
+
+    @discardableResult
+    func openFolder(from urls: [URL]) -> Bool {
+        guard urls.count == 1, let url = urls.first else {
+            exportMessage = "请每次拖入一个照片文件夹。"
+            return false
+        }
+        guard url.isFileURL,
+              let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .isPackageKey]),
+              values.isDirectory == true, values.isPackage != true else {
+            exportMessage = "请选择一个有效的文件夹，而不是照片或应用程序。"
+            return false
+        }
+        sourcePath = url.standardizedFileURL.path
+        Task { await loadPhotos() }
+        return true
     }
 
     func exportFilteredPhotos() {
