@@ -105,7 +105,7 @@ struct FilterOptions: Sendable {
     var ratingFilter: RatingFilter = .all
     var fileTypeFilter: FileTypeFilter = .all
     var tagFilter: String? = nil
-    var sortOption: SortOption = .date
+    var sortOption: SortOption = .name
     var sortAscending: Bool = false
     var startDate: Date? = nil
     var endDate: Date? = nil

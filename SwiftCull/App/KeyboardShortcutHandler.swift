@@ -132,6 +132,10 @@ enum KeyboardShortcutHandler {
                 NSApp.keyWindow?.makeFirstResponder(nil)
                 return true
             }
+            if store.viewMode == .single {
+                store.viewMode = .grid
+                return true
+            }
             if store.isSelectMode {
                 store.cancelSelectMode()
                 return true

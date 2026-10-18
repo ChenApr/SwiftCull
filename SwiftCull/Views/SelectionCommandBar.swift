@@ -120,7 +120,7 @@ struct ShortcutHintBar: View {
         }
         if store.viewMode == .single {
             var items = [
-                ShortcutHintItem(keys: ["E"], label: "退出大图浏览"),
+                ShortcutHintItem(keys: ["E", "Esc"], label: "退出大图浏览"),
                 ShortcutHintItem(keys: ["Space"], label: "快速预览"),
                 ShortcutHintItem(keys: ["←", "→"], label: "上一张 / 下一张")
             ]
@@ -167,7 +167,7 @@ struct ShortcutHintBar: View {
     }
 }
 
-/// 秒显示后，后台补充拍摄日期/标签时的细粒度进度条
+/// Only appears while a requested date or tag index is incomplete.
 struct EnrichProgressBar: View {
     @EnvironmentObject var store: PhotoStore
 

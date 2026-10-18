@@ -23,7 +23,11 @@ class PhotoStore: ObservableObject {
     @Published private(set) var filteredPhotosVersion = 0
     @Published var selectedPhoto: PhotoEntry? {
         didSet {
-            if oldValue?.id != selectedPhoto?.id { exitVideoPlaybackMode() }
+            if oldValue?.id != selectedPhoto?.id {
+                exitVideoPlaybackMode()
+                scheduleVisibleTagLoad()
+                schedulePreviewPreheat()
+            }
         }
     }
     @Published var selectedPhotos: Set<String> = []
@@ -34,6 +38,8 @@ class PhotoStore: ObservableObject {
     @Published var isEnriching = false
     @Published var enrichProgress: Double = 0
     @Published var enrichStatus: String = ""
+    @Published private(set) var captureDatesReady = false
+    private(set) var needsDateGrouping = false
     @Published var sourcePath: String = ""
     @Published var errorMessage: String?
     @Published var showingDeleteConfirmation = false
@@ -46,6 +52,13 @@ class PhotoStore: ObservableObject {
     @Published var viewMode: PhotoViewMode = .grid {
         didSet {
             if viewMode != .single { exitVideoPlaybackMode() }
+            guard oldValue != viewMode else { return }
+            scheduleVisibleTagLoad()
+            schedulePreviewPreheat()
+            if viewMode == .single {
+                preheatTask?.cancel()
+                thumbnailService.preloadThumbnails(paths: [], size: 128)
+            }
         }
     }
     @Published private(set) var isVideoPlaybackMode = false
@@ -71,6 +84,26 @@ class PhotoStore: ObservableObject {
     private var sidecarEntries: [String: PhotoMetadata] = [:]
     private var latestCopyID = UUID()
     private var enrichmentTask: Task<Void, Never>?
+    private let dateIndex: PhotoDateIndex
+    private var dateRequestID = UUID()
+    private var tagIndexTask: Task<Void, Never>?
+    private var visibleTagTask: Task<Void, Never>?
+    private var visiblePhotoIDs: Set<String> = []
+    private(set) var isGridScrolling = false
+    private var deferredTagValues: [String: [String]] = [:]
+    private var deferredTagRevisions: [String: UUID] = [:]
+    private var loadedTagSources: Set<String> = []
+    private var tagFilterReady = false
+    private var editSessionID = UUID()
+    private struct PendingTagAction {
+        let id = UUID()
+        let loadID: UUID
+        let sessionID: UUID
+        let photos: [PhotoEntry]
+        let action: () -> Void
+    }
+    private var pendingTagActions: [PendingTagAction] = []
+    private var tagActionTask: Task<Void, Never>?
     private var tagWriteIDs: [String: UUID] = [:]
 
     /// 选择模式下被编辑过的照片在编辑前的原始状态（用于「取消」纯内存回滚，零磁盘 IO）
@@ -82,8 +115,10 @@ class PhotoStore: ObservableObject {
 
     private var gridColumnCount = 1
     private var currentLoadID = UUID()
+    private var latestLoadRequestID = UUID()
     private var lastPreheatKey: String?
     private var preheatTask: Task<Void, Never>?
+    private var previewPreheatTask: Task<Void, Never>?
     /// filteredPhotos 的 id→下标缓存，随 applyFilters 重建，供滚动预热/方向键导航 O(1) 定位。
     private var filteredIndexById: [String: Int] = [:]
     private var cachedTotalSize = ByteCountFormatter.string(fromByteCount: 0, countStyle: .file)
@@ -92,10 +127,11 @@ class PhotoStore: ObservableObject {
     }
 
     init(fileService: FileService = .shared, ratingService: RatingService = .shared,
-         projectMetadata: ProjectMetadataService = .shared) {
+         projectMetadata: ProjectMetadataService = .shared, dateIndex: PhotoDateIndex = .shared) {
         self.fileService = fileService
         self.ratingService = ratingService
         self.projectMetadata = projectMetadata
+        self.dateIndex = dateIndex
     }
 
     /// Wait for queued Finder-tag writes before scanning metadata again. This
@@ -111,6 +147,16 @@ class PhotoStore: ObservableObject {
 
     /// Drain background tags and delayed sidecars before the process exits.
     func flushPendingWrites() {
+        // Termination cannot await the main actor. Finish already requested edits
+        // before draining their writes; ordinary browsing never uses this sync path.
+        while let pending = pendingTagActions.first {
+            let values = tagWriteQueue.sync {
+                Dictionary(uniqueKeysWithValues: pending.photos.map {
+                    ($0.sourceID, tagService.getTagsForPhotoPair($0))
+                })
+            }
+            finishTagAction(pending, values: values)
+        }
         tagWriteQueue.sync {}
         let failures = projectMetadata.flush()
         if !failures.isEmpty {
@@ -371,11 +417,16 @@ class PhotoStore: ObservableObject {
 
     func contextToggleTag(_ tag: String, clicked photo: PhotoEntry, useSelection: Bool = true) {
         let targets = contextPhotos(clicked: photo, useSelection: useSelection)
-        let remove = targets.allSatisfy { $0.tags.contains(tag) }
-        if isSelectMode {
-            updateTag(tag, adding: !remove, for: Set(targets.map(\.id)))
-        } else {
-            targets.forEach { remove ? removeTag(tag, from: $0) : addTag(tag, to: $0) }
+        let ids = Set(targets.map(\.id))
+        let selectionMode = isSelectMode
+        withLoadedTags(for: ids) { [self] in
+            let current = photos.filter { ids.contains($0.id) }
+            let remove = current.allSatisfy { $0.tags.contains(tag) }
+            if selectionMode {
+                updateLoadedTag(tag, adding: !remove, for: ids)
+            } else {
+                current.forEach { remove ? removeLoadedTag(tag, from: $0) : addLoadedTag(tag, to: $0) }
+            }
         }
     }
 
@@ -393,15 +444,36 @@ class PhotoStore: ObservableObject {
     }
 
     func loadPhotos() async {
-        let loadID = UUID()
+        let requestID = UUID()
+        latestLoadRequestID = requestID
         let folderPath = sourcePath
+        // Preserve accepted tag edits before replacing the folder/session.
+        await tagActionTask?.value
+        guard latestLoadRequestID == requestID else { return }
+        let loadID = UUID()
         enrichmentTask?.cancel()
         enrichmentTask = nil
+        dateRequestID = UUID()
+        tagIndexTask?.cancel()
+        tagIndexTask = nil
+        visibleTagTask?.cancel()
+        visibleTagTask = nil
+        visiblePhotoIDs = []
+        isGridScrolling = false
+        GridImageDelivery.shared.setScrolling(false)
+        deferredTagValues = [:]
+        deferredTagRevisions = [:]
+        loadedTagSources = []
+        tagFilterReady = false
+        captureDatesReady = false
+        editSessionID = UUID()
         currentLoadID = loadID
         tagWriteIDs.removeAll()
         lastPreheatKey = nil
         preheatTask?.cancel()
         preheatTask = nil
+        previewPreheatTask?.cancel()
+        previewPreheatTask = nil
         thumbnailService.cancelPending()
         thumbnailService.clearInMemoryCache()
         thumbnailService.cleanupDiskCache()
@@ -484,136 +556,251 @@ class PhotoStore: ObservableObject {
         }
 
         photos = initial
-        applyFilters()
+        filteredIndexById = [:]
         loadingProgress = 1
         loadingStatus = fast.isEmpty ? "未找到可识别的照片" : "加载完成"
         isLoading = false
 
-        guard !fast.isEmpty else { return }
+        applyFilters()
+    }
 
-        // 第二阶段：后台补充 EXIF 拍摄日期与 Finder 标签，完成后按拍摄日期平滑重排
-        let task = Task { [weak self] in
-            guard let self else { return }
-            await self.enrichPhotos(loadID: loadID)
-        }
-        enrichmentTask = task
-        await task.value
-        if currentLoadID == loadID {
-            enrichmentTask = nil
+    /// Date and tag indexes are independent: ordinary browsing opens no image headers.
+    func setDateGroupingEnabled(_ enabled: Bool) {
+        needsDateGrouping = enabled
+        refreshMetadataDemand()
+    }
+
+    func waitForCaptureDates() async -> Bool {
+        let loadID = currentLoadID
+        await enrichmentTask?.value
+        return currentLoadID == loadID && captureDatesReady
+    }
+
+    func areTagsLoaded(for photo: PhotoEntry) -> Bool {
+        loadedTagSources.contains(photo.sourceID)
+    }
+
+    private func updateIndexStatus() {
+        isEnriching = enrichmentTask != nil || tagIndexTask != nil
+        if enrichmentTask != nil {
+            enrichStatus = "正在建立拍摄日期索引，完成后更新时间顺序与分组…"
+        } else if tagIndexTask != nil {
+            enrichStatus = "正在读取 Finder 标签，完成后应用筛选…"
+        } else {
+            enrichStatus = ""
+            enrichProgress = 0
         }
     }
 
-    /// 后台补充拍摄日期与标签，带细粒度进度；完成后按最终拍摄日期重排
-    private func enrichPhotos(loadID: UUID) async {
-        let snapshot = photos
-        let sourceEntries = Dictionary(grouping: snapshot, by: \.sourceID).compactMap { $0.value.first }
-        let total = sourceEntries.count
-        guard total > 0 else { return }
-
-        isEnriching = true
-        enrichProgress = 0
-        enrichStatus = "正在读取拍摄信息…"
-
-        struct EnrichResult: Sendable {
-            let sourceID: String
-            let captureDate: Date?
-            let tags: [String]
+    private func refreshMetadataDemand() {
+        guard !isLoading, !photos.isEmpty else { return }
+        let needsDates = filterOptions.sortOption == .date || filterOptions.dateFilterEnabled || needsDateGrouping
+        if !needsDates {
+            enrichmentTask?.cancel()
+            enrichmentTask = nil
+            dateRequestID = UUID()
+        } else if !captureDatesReady && enrichmentTask == nil {
+            let loadID = currentLoadID
+            let requestID = UUID()
+            dateRequestID = requestID
+            let folder = sourcePath
+            let sources = photos.filter { !$0.isVersionCopy && !$0.isDeleted }
+            let index = dateIndex
+            enrichmentTask = Task(priority: .utility) { [weak self] in
+                // Give initial visible thumbnails a head start.
+                do { try await Task.sleep(for: .milliseconds(200)) } catch { return }
+                var dates: [String: Date] = [:]
+                for start in stride(from: 0, to: sources.count, by: 64) {
+                    guard await self?.waitForGridIdle(loadID: loadID) == true else { await index.flush(); return }
+                    guard !Task.isCancelled else { await index.flush(); return }
+                    let batch = Array(sources[start..<min(start + 64, sources.count)])
+                    let values = await index.dates(for: batch, folderPath: folder)
+                    guard let self, !Task.isCancelled, self.currentLoadID == loadID,
+                          self.dateRequestID == requestID else { await index.flush(); return }
+                    dates.merge(values) { _, new in new }
+                    self.enrichProgress = Double(min(start + 64, sources.count)) / Double(max(1, sources.count))
+                }
+                await index.flush()
+                guard await self?.waitForGridIdle(loadID: loadID) == true else { return }
+                guard let self, !Task.isCancelled, self.currentLoadID == loadID,
+                      self.dateRequestID == requestID else { return }
+                // Commit the complete index once. Selecting a photo never changes grid order.
+                var updated = self.photos
+                for i in updated.indices {
+                    if let date = dates[updated[i].sourceID] { updated[i].fileDate = date }
+                }
+                self.photos = updated
+                if let id = self.selectedPhoto?.id {
+                    self.selectedPhoto = updated.first { $0.id == id && !$0.isDeleted }
+                }
+                self.captureDatesReady = true
+                self.enrichmentTask = nil
+                self.applyFilters()
+            }
         }
 
-        // A card is much slower at many concurrent metadata reads than at a small
-        // bounded stream. Keep visible thumbnail work ahead of this utility queue.
-        let maxConcurrentReads = 2
-        var results: [EnrichResult] = []
-        results.reserveCapacity(total)
-        var completedCount = 0
+        if filterOptions.tagFilter == nil {
+            tagIndexTask?.cancel()
+            tagIndexTask = nil
+        } else if !tagFilterReady && tagIndexTask == nil {
+            let loadID = currentLoadID
+            let sources = photos.filter { !$0.isVersionCopy && !$0.isDeleted && !loadedTagSources.contains($0.sourceID) }
+            tagIndexTask = Task(priority: .utility) { [weak self] in
+                let revisions = self?.tagWriteIDs ?? [:]
+                var allValues: [String: [String]] = [:]
+                for start in stride(from: 0, to: sources.count, by: 64) {
+                    guard await self?.waitForGridIdle(loadID: loadID) == true else { return }
+                    guard let self, !Task.isCancelled, self.currentLoadID == loadID else { return }
+                    let batch = Array(sources[start..<min(start + 64, sources.count)])
+                    let values = await self.readTags(batch)
+                    guard !Task.isCancelled, self.currentLoadID == loadID else { return }
+                    allValues.merge(values) { _, new in new }
+                    if self.enrichmentTask == nil {
+                        self.enrichProgress = Double(min(start + 64, sources.count)) / Double(max(1, sources.count))
+                    }
+                }
+                guard await self?.waitForGridIdle(loadID: loadID) == true else { return }
+                guard let self, !Task.isCancelled, self.currentLoadID == loadID else { return }
+                self.acceptTags(allValues, revisions: revisions)
+                self.tagFilterReady = true
+                self.tagIndexTask = nil
+                self.applyFilters()
+            }
+        }
+        updateIndexStatus()
+    }
 
-        await withTaskGroup(of: EnrichResult?.self) { group in
-            var nextIndex = 0
+    func photoDidAppear(_ photo: PhotoEntry) {
+        visiblePhotoIDs.insert(photo.id)
+        if viewMode == .grid && !isGridScrolling { scheduleVisibleTagLoad() }
+    }
 
-            func addNextRead() {
-                guard nextIndex < sourceEntries.count else { return }
-                let photo = sourceEntries[nextIndex]
-                nextIndex += 1
-                group.addTask(priority: .utility) {
-                    guard !Task.isCancelled else { return nil }
-                    let tagService = TagService.shared
-                    return EnrichResult(
-                        sourceID: photo.sourceID,
-                        captureDate: FileService.captureDate(for: photo),
-                        tags: tagService.getTagsForPhotoPair(photo)
-                    )
+    func photoDidDisappear(_ photo: PhotoEntry) {
+        visiblePhotoIDs.remove(photo.id)
+        if viewMode == .grid && !isGridScrolling { scheduleVisibleTagLoad() }
+    }
+
+    func setGridScrolling(_ scrolling: Bool) {
+        guard scrolling != isGridScrolling else { return }
+        isGridScrolling = scrolling
+        GridImageDelivery.shared.setScrolling(scrolling)
+        if scrolling {
+            visibleTagTask?.cancel()
+        } else {
+            let values = deferredTagValues
+            let revisions = deferredTagRevisions
+            deferredTagValues = [:]
+            deferredTagRevisions = [:]
+            acceptTags(values, revisions: revisions)
+            scheduleVisibleTagLoad()
+        }
+    }
+
+    private func waitForGridIdle(loadID: UUID) async -> Bool {
+        while isGridScrolling {
+            do { try await Task.sleep(for: .milliseconds(30)) } catch { return false }
+            guard currentLoadID == loadID else { return false }
+        }
+        return !Task.isCancelled && currentLoadID == loadID
+    }
+
+    private func scheduleVisibleTagLoad() {
+        visibleTagTask?.cancel()
+        let loadID = currentLoadID
+        visibleTagTask = Task(priority: .utility) { [weak self] in
+            // Coalesce card appearances; continuous scrolling prioritizes thumbnails.
+            do { try await Task.sleep(for: .milliseconds(150)) } catch { return }
+            guard let self, self.currentLoadID == loadID, !self.isLoading, !self.isGridScrolling else { return }
+            let selected = self.selectedPhoto?.sourceID
+            var seen: Set<String> = []
+            let targets = self.photos.filter {
+                !self.loadedTagSources.contains($0.sourceID) &&
+                ((self.viewMode == .grid && self.visiblePhotoIDs.contains($0.id)) || $0.sourceID == selected) &&
+                !$0.isDeleted && seen.insert($0.sourceID).inserted
+            }
+            let revisions = self.tagWriteIDs
+            let values = await self.readTags(targets)
+            guard !Task.isCancelled, self.currentLoadID == loadID else { return }
+            if self.isGridScrolling {
+                self.deferredTagValues.merge(values) { _, new in new }
+                for source in values.keys { self.deferredTagRevisions[source] = revisions[source] }
+                return
+            }
+            self.acceptTags(values, revisions: revisions)
+        }
+    }
+
+    private func readTags(_ targets: [PhotoEntry]) async -> [String: [String]] {
+        var values: [String: [String]] = [:]
+        for photo in targets {
+            guard !Task.isCancelled else { break }
+            let tags: [String] = await withCheckedContinuation { continuation in
+                tagWriteQueue.async {
+                    continuation.resume(returning: TagService.shared.getTagsForPhotoPair(photo))
                 }
             }
+            values[photo.sourceID] = tags
+        }
+        return values
+    }
 
-            for _ in 0..<min(maxConcurrentReads, sourceEntries.count) {
-                addNextRead()
-            }
-
-            while let result = await group.next() {
-                guard !Task.isCancelled, currentLoadID == loadID else {
-                    group.cancelAll()
-                    break
-                }
-                if let result {
-                    results.append(result)
-                }
-                completedCount += 1
-                enrichProgress = Double(completedCount) / Double(total)
-                enrichStatus = "正在读取拍摄信息 \(completedCount)/\(total)"
-                addNextRead()
+    private func acceptTags(_ values: [String: [String]], revisions: [String: UUID]) {
+        let accepted = values.filter { !loadedTagSources.contains($0.key) && tagWriteIDs[$0.key] == revisions[$0.key] }
+        guard !accepted.isEmpty else { return }
+        loadedTagSources.formUnion(accepted.keys)
+        var updated = photos
+        var photosChanged = false
+        for i in updated.indices {
+            guard let tags = accepted[updated[i].sourceID] else { continue }
+            if updated[i].tags != tags { updated[i].tags = tags; photosChanged = true }
+            // A rating-only edit may have captured a not-yet-loaded tag baseline.
+            if let original = editedOriginals[updated[i].id] {
+                editedOriginals[updated[i].id] = OriginalPhotoState(rating: original.rating, tags: tags)
             }
         }
-
-        guard !Task.isCancelled, currentLoadID == loadID else { isEnriching = false; return }
-
-        var dateMap: [String: Date] = [:]
-        var tagMap: [String: [String]] = [:]
-        for result in results {
-            if let date = result.captureDate { dateMap[result.sourceID] = date }
-            tagMap[result.sourceID] = result.tags
-        }
-
-        var rebuilt: [PhotoEntry] = []
-        rebuilt.reserveCapacity(photos.count)
-        for photo in photos {
-            let exifDate = dateMap[photo.sourceID]
-            let needsRebuild = exifDate != nil && exifDate != photo.fileDate
-            var updated: PhotoEntry
-            if needsRebuild {
-                updated = PhotoEntry(
-                    baseName: photo.baseName,
-                    jpgPath: photo.jpgPath,
-                    nefPath: photo.nefPath,
-                    movPath: photo.movPath,
-                    jpgFileSize: photo.jpgFileSize,
-                    nefFileSize: photo.nefFileSize,
-                    movFileSize: photo.movFileSize,
-                    fileDate: exifDate!,
-                    modificationDate: photo.modificationDate
-                )
-                updated = updated.asVersion(CropVersion(id: photo.versionID, name: photo.versionName,
-                                                        crop: photo.cropRect, aspect: photo.cropAspect))
-                updated.rating = photo.rating
-                updated.tags = photo.tags
-                updated.isDeleted = photo.isDeleted
-            } else {
-                updated = photo
+        if photosChanged { photos = updated }
+        var filtered = filteredPhotos
+        var filteredChanged = false
+        for i in filtered.indices {
+            if let tags = accepted[filtered[i].sourceID], filtered[i].tags != tags {
+                filtered[i].tags = tags
+                filteredChanged = true
             }
-            // 标签：未处于用户编辑中的照片，采用磁盘读取的最新标签
-            if editedOriginals[photo.id] == nil, let tags = tagMap[photo.sourceID] {
-                updated.tags = tags
+        }
+        if filteredChanged { filteredPhotos = filtered }
+        if let source = selectedPhoto?.sourceID, let tags = accepted[source] { selectedPhoto?.tags = tags }
+    }
+
+    /// Tag edits wait for their original disk values, in user action order.
+    /// Captured IDs and session tokens prevent delayed edits affecting another selection/folder.
+    private func withLoadedTags(for ids: Set<String>, action: @escaping () -> Void) {
+        var seen: Set<String> = []
+        let targets = photos.filter {
+            ids.contains($0.id) && !loadedTagSources.contains($0.sourceID) && seen.insert($0.sourceID).inserted
+        }
+        if targets.isEmpty && pendingTagActions.isEmpty {
+            action()
+            return
+        }
+        let pending = PendingTagAction(loadID: currentLoadID, sessionID: editSessionID, photos: targets, action: action)
+        pendingTagActions.append(pending)
+        guard tagActionTask == nil else { return }
+        tagActionTask = Task { [weak self] in
+            while let self, let next = self.pendingTagActions.first {
+                let targets = next.photos.filter { !self.loadedTagSources.contains($0.sourceID) }
+                let values = await self.readTags(targets)
+                self.finishTagAction(next, values: values)
             }
-            rebuilt.append(updated)
+            self?.tagActionTask = nil
         }
+    }
 
-        photos = rebuilt
-        withAnimation(.snappy(duration: 0.3)) {
-            applyFilters()
-        }
-
-        enrichProgress = 1
-        enrichStatus = ""
-        isEnriching = false
+    private func finishTagAction(_ pending: PendingTagAction, values: [String: [String]]) {
+        guard pendingTagActions.first?.id == pending.id else { return }
+        pendingTagActions.removeFirst()
+        guard pending.loadID == currentLoadID, pending.sessionID == editSessionID else { return }
+        acceptTags(values, revisions: tagWriteIDs)
+        pending.action()
     }
 
     // MARK: - Sidecar 标注同步
@@ -632,6 +819,7 @@ class PhotoStore: ObservableObject {
     }
 
     func preloadThumbnails(around photo: PhotoEntry, size: CGFloat) {
+        guard viewMode == .grid else { return }
         guard let centerIndex = filteredIndexById[photo.id] else { return }
         let quantizedSize = ThumbnailService.quantizedSize(size)
         let columns = max(1, gridColumnCount)
@@ -649,7 +837,7 @@ class PhotoStore: ObservableObject {
         preheatTask = Task { @MainActor [weak self] in
             do { try await Task.sleep(for: .milliseconds(30)) }
             catch { return }
-            guard let self, self.currentLoadID == loadID,
+            guard let self, self.viewMode == .grid, self.currentLoadID == loadID,
                   self.filteredPhotosVersion == photosVersion else { return }
             let lowerBound = max(0, centerIndex - columns * 2)
             let upperBound = min(self.filteredPhotos.count, centerIndex + columns * 4 + 1)
@@ -660,7 +848,35 @@ class PhotoStore: ObservableObject {
         }
     }
 
+    func previewDidLoad(photoID: String) {
+        guard selectedPhoto?.id == photoID else { return }
+        schedulePreviewPreheat(delay: .zero)
+    }
+
+    private func schedulePreviewPreheat(delay: Duration = .milliseconds(500)) {
+        previewPreheatTask?.cancel()
+        guard viewMode == .single, let selected = selectedPhoto,
+              let center = filteredIndexById[selected.id] else {
+            thumbnailService.preloadInspectorThumbnails(photos: [])
+            return
+        }
+        let neighbors = [1, -1, 2].compactMap { offset -> PhotoEntry? in
+            let index = center + offset
+            return filteredPhotos.indices.contains(index) ? filteredPhotos[index] : nil
+        }
+        let loadID = currentLoadID
+        previewPreheatTask = Task { [weak self] in
+            // Do not compete with the current original decode. Its completion
+            // warms neighbors immediately; the delay also covers video/failure paths.
+            do { try await Task.sleep(for: delay) } catch { return }
+            guard let self, self.currentLoadID == loadID, self.viewMode == .single,
+                  self.selectedPhoto?.id == selected.id else { return }
+            self.thumbnailService.preloadInspectorThumbnails(photos: neighbors)
+        }
+    }
+
     func applyFilters() {
+        refreshMetadataDemand()
         let trimmedQuery = filterOptions.searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         let query = trimmedQuery.isEmpty ? nil : trimmedQuery.lowercased()
         let ratingFilter = filterOptions.ratingFilter
@@ -692,10 +908,10 @@ class PhotoStore: ObservableObject {
             case .hasMov: if !photo.hasMov { continue }
             }
 
-            if let tagFilter, !photo.tags.contains(tagFilter) { continue }
+            if tagFilterReady, let tagFilter, !photo.tags.contains(tagFilter) { continue }
 
             // 日期范围过滤（仅开启时生效）
-            if filterOptions.dateFilterEnabled {
+            if filterOptions.dateFilterEnabled && captureDatesReady {
                 if let start = filterOptions.startDate, photo.fileDate < start { continue }
                 if let end = filterOptions.endDate, photo.fileDate > end { continue }
             }
@@ -718,6 +934,15 @@ class PhotoStore: ObservableObject {
         switch filterOptions.sortOption {
         case .name:
             sorted = representatives.sorted { $0.baseName < $1.baseName }
+        case .date where !captureDatesReady:
+            // Keep the displayed order until the complete capture-date index is
+            // ready, instead of temporarily sorting by unrelated filesystem dates.
+            sorted = representatives.sorted {
+                let lhs = filteredIndexById[$0.id] ?? Int.max
+                let rhs = filteredIndexById[$1.id] ?? Int.max
+                if lhs != rhs { return filterOptions.sortAscending ? lhs < rhs : lhs > rhs }
+                return $0.baseName < $1.baseName
+            }
         case .date:
             sorted = representatives.sorted { $0.fileDate == $1.fileDate ? $0.baseName < $1.baseName : $0.fileDate < $1.fileDate }
         case .rating:
@@ -736,13 +961,21 @@ class PhotoStore: ObservableObject {
 
     func setRating(_ rating: Int, for photo: PhotoEntry) {
         ratingService.setRating(rating, for: photo.sourceID, folderPath: sourcePath)
-        for index in photos.indices where photos[index].sourceID == photo.sourceID { photos[index].rating = rating }
-        for index in filteredPhotos.indices where filteredPhotos[index].sourceID == photo.sourceID { filteredPhotos[index].rating = rating }
+        var all = photos
+        for index in all.indices where all[index].sourceID == photo.sourceID { all[index].rating = rating }
+        if all != photos { photos = all }
+        var filtered = filteredPhotos
+        for index in filtered.indices where filtered[index].sourceID == photo.sourceID { filtered[index].rating = rating }
+        if filtered != filteredPhotos { filteredPhotos = filtered }
         if selectedPhoto?.sourceID == photo.sourceID { selectedPhoto?.rating = rating }
         syncSidecar()
     }
 
     func clearTags(for photo: PhotoEntry) {
+        withLoadedTags(for: [photo.id]) { [self] in clearLoadedTags(for: photo) }
+    }
+
+    private func clearLoadedTags(for photo: PhotoEntry) {
         guard let index = photos.firstIndex(where: { $0.id == photo.id }) else { return }
         scheduleTagWrite([], for: photos[index])
         setSharedTags([], sourceID: photo.sourceID)
@@ -874,6 +1107,10 @@ class PhotoStore: ObservableObject {
     }
 
     private func updateTag(_ tag: String, adding: Bool, for ids: Set<String>) {
+        withLoadedTags(for: ids) { [self] in updateLoadedTag(tag, adding: adding, for: ids) }
+    }
+
+    private func updateLoadedTag(_ tag: String, adding: Bool, for ids: Set<String>) {
         guard !ids.isEmpty else { return }
         let sourceIDs = Set(photos.filter { ids.contains($0.id) }.map(\.sourceID))
         let ids = Set(photos.filter { sourceIDs.contains($0.sourceID) }.map(\.id))
@@ -911,6 +1148,10 @@ class PhotoStore: ObservableObject {
     }
 
     private func clearTags(for ids: Set<String>) {
+        withLoadedTags(for: ids) { [self] in clearLoadedTags(for: ids) }
+    }
+
+    private func clearLoadedTags(for ids: Set<String>) {
         guard !ids.isEmpty else { return }
         let sourceIDs = Set(photos.filter { ids.contains($0.id) }.map(\.sourceID))
         let ids = Set(photos.filter { sourceIDs.contains($0.sourceID) }.map(\.id))
@@ -932,6 +1173,10 @@ class PhotoStore: ObservableObject {
     }
 
     func addTag(_ tag: String, to photo: PhotoEntry) {
+        withLoadedTags(for: [photo.id]) { [self] in addLoadedTag(tag, to: photo) }
+    }
+
+    private func addLoadedTag(_ tag: String, to photo: PhotoEntry) {
         guard let index = photos.firstIndex(where: { $0.id == photo.id }) else { return }
         var currentTags = photos[index].tags
         if !currentTags.contains(tag) {
@@ -942,6 +1187,10 @@ class PhotoStore: ObservableObject {
     }
 
     func removeTag(_ tag: String, from photo: PhotoEntry) {
+        withLoadedTags(for: [photo.id]) { [self] in removeLoadedTag(tag, from: photo) }
+    }
+
+    private func removeLoadedTag(_ tag: String, from photo: PhotoEntry) {
         guard let index = photos.firstIndex(where: { $0.id == photo.id }) else { return }
         var currentTags = photos[index].tags
         currentTags.removeAll { $0 == tag }
@@ -958,6 +1207,7 @@ class PhotoStore: ObservableObject {
 
     /// 取消：纯内存回滚被编辑过的照片，零磁盘 IO
     func cancelSelectMode() {
+        editSessionID = UUID()
         if !editedOriginals.isEmpty {
             let photoMap = buildPhotoIndexMap()
             let filteredMap = buildFilteredIndexMap()
@@ -974,12 +1224,22 @@ class PhotoStore: ObservableObject {
         }
         editedOriginals = [:]
         selectedPhotos = []
-        selectedPhoto = nil
+        // Cancelling a drag selection must not close an already-open inspector.
+        // Refresh its focused entry so rolled-back ratings and tags are displayed.
+        if isInspectorVisible, let focusedID = selectedPhoto?.id {
+            selectedPhoto = photos.first { $0.id == focusedID && !$0.isDeleted }
+        } else {
+            selectedPhoto = nil
+        }
         isSelectMode = false
     }
 
     /// 完成：把本次会话的改动一次性落盘（标签写盘在后台线程）
     func confirmSelectMode() {
+        withLoadedTags(for: []) { [self] in finishSelectModeEdits() }
+    }
+
+    private func finishSelectModeEdits() {
         persistSelectModeEdits()
         editedOriginals = [:]
         selectedPhotos = []

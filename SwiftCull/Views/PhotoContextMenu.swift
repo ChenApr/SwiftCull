@@ -56,7 +56,7 @@ struct PhotoContextMenu: View {
                 }
             }
             Button("清除所有标签") { store.contextClearTags(clicked: photo, useSelection: useSelection) }
-                .disabled(targets.allSatisfy { $0.tags.isEmpty })
+                .disabled(targets.allSatisfy { store.areTagsLoaded(for: $0) && $0.tags.isEmpty })
         } label: {
             Label(isBatch ? "给所选 \(targets.count) 张设标签" : "Finder 标签", systemImage: "tag")
         }

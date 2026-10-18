@@ -98,7 +98,9 @@ jobs:
             build
 
       - name: Watermark rendering smoke test
-        run: bash Tests/run-watermark-smoke.sh
+        run: |
+          bash Tests/run-watermark-smoke.sh
+          bash Tests/run-watermark-font-download-smoke.sh
 
       - name: Photo actions and crop regression tests
         run: |
@@ -109,6 +111,9 @@ jobs:
         run: |
           bash Tests/run-thumbnail-pipeline-smoke.sh
           bash Tests/run-data-integrity-smoke.sh
+          bash Tests/run-lazy-metadata-smoke.sh
+          bash Tests/run-grid-presentation-smoke.sh
+          bash Tests/run-preview-resolution-smoke.sh
 
       - name: Live Photo smoke test
         run: bash Tests/run-live-photo-smoke.sh

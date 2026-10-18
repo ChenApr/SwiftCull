@@ -62,11 +62,15 @@ final class ThumbnailService: @unchecked Sendable {
     private let cache = NSCache<NSString, NSImage>()
     private let workQueue = DispatchQueue(label: "com.swiftcull.thumbnail.work", qos: .userInitiated, attributes: .concurrent)
     private let preheatQueue = DispatchQueue(label: "com.swiftcull.thumbnail.preheat", qos: .utility)
+    private let inspectorQueue = DispatchQueue(label: "com.swiftcull.preview.work", qos: .userInitiated, attributes: .concurrent)
+    private let inspectorPreheatQueue = DispatchQueue(label: "com.swiftcull.preview.preheat", qos: .utility, attributes: .concurrent)
     private let diskWriteQueue = DispatchQueue(label: "com.swiftcull.thumbnail.disk", qos: .utility)
     private let stateQueue = DispatchQueue(label: "com.swiftcull.thumbnail.state")
     private let generationSemaphore = DispatchSemaphore(value: 4)
+    private let inspectorSemaphore = DispatchSemaphore(value: 2)
     private var inProgress: [String: PendingRequest] = [:]
     private var preheatWaiters: [String: Waiter] = [:]
+    private var inspectorPreheatWaiters: [String: Waiter] = [:]
     private var generation = 0
 
     private let diskCacheDir: URL
@@ -159,7 +163,9 @@ final class ThumbnailService: @unchecked Sendable {
         guard shouldStart || promote else { return }
 
         let generationForRequest = requestGeneration
-        let queue = preheat ? preheatQueue : workQueue
+        let queue = mode == .inspector
+            ? (preheat ? inspectorPreheatQueue : inspectorQueue)
+            : (preheat ? preheatQueue : workQueue)
         queue.async { [weak self] in
             self?.produceThumbnail(path: path, id: id, size: size, crop: crop,
                                    generation: generationForRequest, mode: mode)
@@ -172,6 +178,7 @@ final class ThumbnailService: @unchecked Sendable {
             let waiters = inProgress.values.flatMap(\.waiters)
             inProgress.removeAll()
             preheatWaiters.removeAll()
+            inspectorPreheatWaiters.removeAll()
             return waiters
         }
         waiters.forEach { $0.resolve(nil) }
@@ -224,31 +231,48 @@ final class ThumbnailService: @unchecked Sendable {
             .prefix(80)
         let keyedItems = items.map { (id: Self.cacheKey(path: $0.path, size: size, crop: $0.crop),
                                        path: $0.path, crop: $0.crop) }
+        preload(keyedItems, size: size, mode: .grid)
+    }
+
+    /// Keep only a few adjacent fit previews warm; never predecode their originals.
+    func preloadInspectorThumbnails(photos: [PhotoEntry]) {
+        let items = photos.prefix(3).filter {
+            !$0.primaryFilePath.isEmpty && getCached(Self.inspectorCacheKey(for: $0)) == nil
+        }.map { (id: Self.inspectorCacheKey(for: $0), path: $0.primaryFilePath, crop: $0.cropRect) }
+        preload(items, size: CGFloat(Self.inspectorPixelSize) / 2, mode: .inspector)
+    }
+
+    private func preload(_ keyedItems: [(id: String, path: String, crop: CropRect?)],
+                         size: CGFloat, mode: RenderMode) {
         let desired = Set(keyedItems.map(\.id))
         let changes = stateQueue.sync { () -> (obsolete: [Waiter], additions: [(String, String, CropRect?, Waiter)]) in
-            let obsolete = preheatWaiters.filter { !desired.contains($0.key) }.map(\.value)
-            preheatWaiters = preheatWaiters.filter { desired.contains($0.key) }
+            var waiters = mode == .inspector ? inspectorPreheatWaiters : preheatWaiters
+            let obsolete = waiters.filter { !desired.contains($0.key) }.map(\.value)
+            waiters = waiters.filter { desired.contains($0.key) }
             var additions: [(String, String, CropRect?, Waiter)] = []
-            for item in keyedItems where preheatWaiters[item.id]?.isActive != true {
+            for item in keyedItems where waiters[item.id]?.isActive != true {
                 let waiter = Waiter()
-                preheatWaiters[item.id] = waiter
+                waiters[item.id] = waiter
                 additions.append((item.id, item.path, item.crop, waiter))
             }
+            if mode == .inspector { inspectorPreheatWaiters = waiters }
+            else { preheatWaiters = waiters }
             return (obsolete, additions)
         }
         // Keep requests in the overlap of successive windows. Preheating has no
         // UI callback, so completion/cancellation does not schedule main-actor work.
         changes.obsolete.forEach { $0.resolve(nil) }
         for (id, path, crop, waiter) in changes.additions {
-            enqueue(path: path, id: id, size: size, crop: crop, waiter: waiter, preheat: true)
+            enqueue(path: path, id: id, size: size, crop: crop, waiter: waiter, preheat: true, mode: mode)
         }
     }
 
     private func produceThumbnail(path: String, id: String, size: CGFloat, crop: CropRect?,
                                   generation requestGeneration: Int, mode: RenderMode) {
         guard begin(id: id, generation: requestGeneration) else { return }
-        generationSemaphore.wait()
-        defer { generationSemaphore.signal() }
+        let semaphore = mode == .inspector ? inspectorSemaphore : generationSemaphore
+        semaphore.wait()
+        defer { semaphore.signal() }
 
         guard isCurrentGeneration(requestGeneration) else {
             return

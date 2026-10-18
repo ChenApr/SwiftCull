@@ -95,6 +95,11 @@ struct PhotoGridView: View {
         }
         .animation(.snappy(duration: 0.24), value: store.isSelectMode)
         .animation(.snappy(duration: 0.24), value: store.isEnriching)
+        .environment(\.gridThumbnailLoadingEnabled, store.viewMode == .grid)
+        .onAppear { store.setDateGroupingEnabled(groupingMode != .all) }
+        .onChange(of: groupingMode) { _, mode in
+            store.setDateGroupingEnabled(mode != .all)
+        }
         .sheet(item: $selectedWatermarkSelection) { selection in
             WatermarkExportView(store: store, photos: selection.photos)
         }
@@ -117,10 +122,11 @@ struct PhotoGridView: View {
                 store: store,
                 gridSize: CGFloat(gridSize),
                 columns: columns,
-                groupingMode: groupingMode,
+                groupingMode: store.captureDatesReady ? groupingMode : .all,
                 isSelectMode: store.isSelectMode,
                 lastSelectedPhoto: $lastSelectedPhoto
             )
+            .equatable()
         }
     }
 
@@ -620,11 +626,18 @@ struct PhotoGridView: View {
 
     private func selectPhotos(matching component: Calendar.Component) {
         guard let reference = selectionReferencePhoto else { return }
-        let calendar = Calendar.current
-        let ids = Set(store.filteredPhotos
-            .filter { calendar.isDate($0.fileDate, equalTo: reference.fileDate, toGranularity: component) }
-            .map(\.id))
-        store.selectPhotoIds(ids)
+        store.setDateGroupingEnabled(true)
+        Task { @MainActor in
+            guard await store.waitForCaptureDates(), store.isSelectMode,
+                  groupingMode == (component == .month ? .month : .day),
+                  selectionReferencePhoto?.id == reference.id,
+                  let current = store.filteredPhotos.first(where: { $0.id == reference.id }) else { return }
+            let calendar = Calendar.current
+            let ids = Set(store.filteredPhotos
+                .filter { calendar.isDate($0.fileDate, equalTo: current.fileDate, toGranularity: component) }
+                .map(\.id))
+            store.selectPhotoIds(ids)
+        }
     }
 
     private func beginSelectMode() {
@@ -747,8 +760,9 @@ private struct PhotoGroupHeader: View {
     }
 }
 
-struct PhotoGridContent: View {
-    @ObservedObject var store: PhotoStore
+struct PhotoGridContent: View, Equatable {
+    let store: PhotoStore
+    @StateObject private var presentation: PhotoGridPresentation
     let gridSize: CGFloat
     let columns: [GridItem]
     let groupingMode: PhotoGroupingMode
@@ -765,6 +779,23 @@ struct PhotoGridContent: View {
     @State private var didDragSelect = false
     @State private var watermarkSelection: WatermarkPhotoSelection?
     @State private var groupCache = PhotoGroupCache()
+    @State private var pointerSelectionID: String?
+
+    init(store: PhotoStore, gridSize: CGFloat, columns: [GridItem], groupingMode: PhotoGroupingMode,
+         isSelectMode: Bool, lastSelectedPhoto: Binding<PhotoEntry?>) {
+        self.store = store
+        self.gridSize = gridSize
+        self.columns = columns
+        self.groupingMode = groupingMode
+        self.isSelectMode = isSelectMode
+        _lastSelectedPhoto = lastSelectedPhoto
+        _presentation = StateObject(wrappedValue: PhotoGridPresentation(store: store))
+    }
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.store === rhs.store && lhs.gridSize == rhs.gridSize &&
+        lhs.groupingMode == rhs.groupingMode && lhs.isSelectMode == rhs.isSelectMode
+    }
 
     private let gridCoordinateSpace = "photo-grid-space"
 
@@ -791,10 +822,10 @@ struct PhotoGridContent: View {
     }
 
     private var photoGroups: [PhotoGridSection] {
-        groupCache.sections(photos: store.filteredPhotos,
-                            version: store.filteredPhotosVersion,
+        groupCache.sections(photos: presentation.photos,
+                            version: presentation.layoutVersion,
                             mode: groupingMode,
-                            ascending: store.filterOptions.sortAscending)
+                            ascending: presentation.ascending)
     }
 
     var body: some View {
@@ -803,14 +834,14 @@ struct PhotoGridContent: View {
                 ScrollView {
                     LazyVGrid(columns: columns, spacing: 4) {
                         if groupingMode == .all {
-                            ForEach(store.filteredPhotos) { photo in
-                                photoCard(photo)
+                            ForEach(presentation.cards) { card in
+                                photoCard(card)
                             }
                         } else {
                             ForEach(photoGroups) { group in
                                 Section {
                                     ForEach(group.photoIndices, id: \.self) { index in
-                                        photoCard(store.filteredPhotos[index])
+                                        photoCard(presentation.cards[index])
                                     }
                                 } header: {
                                     PhotoGroupHeader(
@@ -825,6 +856,7 @@ struct PhotoGridContent: View {
                         }
                     }
                     .subtleScrollbars()
+                    .background(GridScrollActivity(onActivity: { store.setGridScrolling($0) }))
                     .background {
                         // One measurement for the grid, including the actual space
                         // left by scrollbars. Keyboard navigation needs only this count.
@@ -856,23 +888,19 @@ struct PhotoGridContent: View {
                     if count > 0 { store.updateGridColumnCount(count) }
                 }
                 .onAppear {
-                    cachedPhotoIds = Set(store.filteredPhotos.map(\.id))
+                    cachedPhotoIds = Set(presentation.photos.map(\.id))
                 }
-                .onChange(of: store.filteredPhotosVersion) { _, _ in
+                .onChange(of: presentation.layoutVersion) { _, _ in
                     frameStore.frames.removeAll(keepingCapacity: true)
-                    cachedPhotoIds = Set(store.filteredPhotos.map(\.id))
+                    cachedPhotoIds = Set(presentation.photos.map(\.id))
                 }
             }
-            .onChange(of: store.selectedPhoto?.id) { _, newId in
+            .onReceive(presentation.revealSelection) { newId in
+                let selectedByPointer = newId == pointerSelectionID
+                pointerSelectionID = nil
+                guard !selectedByPointer else { return }
                 guard dragStart == nil else { return }
-                if let newId = newId {
-                    proxy.scrollTo(newId, anchor: .center)
-                }
-            }
-            .task(id: store.viewMode) {
-                guard store.viewMode == .grid, let selectedId = store.selectedPhoto?.id else { return }
-                try? await Task.sleep(for: .milliseconds(300))
-                proxy.scrollTo(selectedId, anchor: .center)
+                proxy.scrollTo(newId, anchor: .center)
             }
         }
         .sheet(item: $watermarkSelection) { selection in
@@ -880,59 +908,30 @@ struct PhotoGridContent: View {
         }
     }
 
-    private func photoCard(_ photo: PhotoEntry) -> some View {
-        SelectablePhotoCardView(
-            photo: photo,
-            gridSize: gridSize,
-            isSelected: store.selectedPhotos.contains(photo.id),
-            isPrimary: store.selectedPhoto?.id == photo.id,
-            isSelectMode: isSelectMode
-        )
-        // Cards own click selection. Keeping this separate from the grid's drag gesture
-        // avoids coordinate-space hit-test failures that otherwise make a click a no-op.
-        .contentShape(Rectangle())
-        .onTapGesture {
-            resignTextInputFocus()
-            handleTap(photo: photo)
-        }
-        .overlay(alignment: .bottomTrailing) {
-            let count = store.versionCount(for: photo)
-            if !photo.isVersionCopy && count > 1 {
-                Button {
-                    store.toggleVersions(for: photo)
-                } label: {
-                    Label("\(count)", systemImage: "square.stack.3d.up")
-                        .font(.system(size: 9, weight: .bold))
-                        .padding(4)
-                        .foregroundStyle(.white)
-                        .background(.black.opacity(0.65), in: Capsule())
-                }
-                .buttonStyle(.plain)
-                .help(store.expandedVersionSources.contains(photo.sourceID) ? "收起裁剪版本" : "展开裁剪版本")
-                .padding(4)
-            }
-        }
-        .id(photo.id)
-        .contextMenu {
-            PhotoContextMenu(store: store, photo: photo) { photos in
-                watermarkSelection = WatermarkPhotoSelection(photos: photos)
-            }
-        }
+    private func photoCard(_ card: PhotoGridCardState) -> some View {
+        PhotoGridCardHost(state: card, store: store, gridSize: gridSize, isSelectMode: isSelectMode,
+                          onTap: { photo in resignTextInputFocus(); handleTap(photo: photo) },
+                          onWatermark: { watermarkSelection = WatermarkPhotoSelection(photos: $0) })
+        .equatable()
+        .id(card.id)
         .onAppear {
+            let photo = card.value.photo
             store.preloadThumbnails(around: photo, size: gridSize)
+            store.photoDidAppear(photo)
         }
+        .onDisappear { store.photoDidDisappear(card.value.photo) }
         .background {
-            PhotoItemFrameReader(photoID: photo.id, coordinateSpace: gridCoordinateSpace, dragStart: $dragStart)
+            PhotoItemFrameReader(photoID: card.id, coordinateSpace: gridCoordinateSpace, dragStart: $dragStart)
         }
     }
 
     private func isGroupSelected(_ group: PhotoGridSection) -> Bool {
-        let ids = Set(group.photoIndices.map { store.filteredPhotos[$0].id })
-        return !ids.isEmpty && ids.isSubset(of: store.selectedPhotos)
+        let ids = Set(group.photoIndices.map { presentation.photos[$0].id })
+        return !ids.isEmpty && ids.isSubset(of: presentation.selectedIDs)
     }
 
     private func toggleGroupSelection(_ group: PhotoGridSection) {
-        let ids = Set(group.photoIndices.map { store.filteredPhotos[$0].id })
+        let ids = Set(group.photoIndices.map { presentation.photos[$0].id })
         guard !ids.isEmpty else { return }
 
         if ids.isSubset(of: store.selectedPhotos) {
@@ -1032,6 +1031,9 @@ struct PhotoGridContent: View {
     }
 
     private func handleTap(photo: PhotoEntry) {
+        // Pointer selection is already visible. Keep its row under the pointer;
+        // keyboard and preview navigation still reveal the newly selected photo.
+        defer { pointerSelectionID = store.selectedPhoto?.id }
         let isCommandPressed = NSEvent.modifierFlags.contains(.command)
         let isShiftPressed = NSEvent.modifierFlags.contains(.shift)
 

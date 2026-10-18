@@ -1,5 +1,46 @@
 import SwiftUI
 
+/// The observed card value is the only dependency that changes when a mark arrives.
+struct PhotoGridCardHost: View, Equatable {
+    @ObservedObject var state: PhotoGridCardState
+    let store: PhotoStore
+    let gridSize: CGFloat
+    let isSelectMode: Bool
+    let onTap: (PhotoEntry) -> Void
+    let onWatermark: ([PhotoEntry]) -> Void
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.state === rhs.state && lhs.store === rhs.store && lhs.gridSize == rhs.gridSize &&
+        lhs.isSelectMode == rhs.isSelectMode
+    }
+
+    var body: some View {
+        let value = state.value
+        let photo = value.photo
+        SelectablePhotoCardView(photo: photo, gridSize: gridSize, isSelected: value.selected,
+                                isPrimary: value.primary, isSelectMode: isSelectMode)
+            .contentShape(Rectangle())
+            .onTapGesture { onTap(photo) }
+            .overlay(alignment: .bottomTrailing) {
+                if !photo.isVersionCopy && value.versionCount > 1 {
+                    Button { store.toggleVersions(for: photo) } label: {
+                        Label("\(value.versionCount)", systemImage: "square.stack.3d.up")
+                            .font(.system(size: 9, weight: .bold))
+                            .padding(4)
+                            .foregroundStyle(.white)
+                            .background(.black.opacity(0.65), in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .help(value.versionsExpanded ? "收起裁剪版本" : "展开裁剪版本")
+                    .padding(4)
+                }
+            }
+            .contextMenu {
+                PhotoContextMenu(store: store, photo: photo, onWatermark: onWatermark)
+            }
+    }
+}
+
 struct SelectablePhotoCardView: View {
     let photo: PhotoEntry
     let gridSize: CGFloat
@@ -103,11 +144,17 @@ struct SelectablePhotoCardView: View {
     }
 
     private var cardBorder: some View {
-        RoundedRectangle(cornerRadius: 4)
-            .stroke(
-                isPrimary ? Color.accentColor : (isSelected ? Color.accentColor.opacity(0.5) : Color.clear),
-                lineWidth: isPrimary ? 2 : 1
-            )
+        ZStack {
+            if isPrimary || isSelected {
+                let width: CGFloat = isPrimary ? 3 : 2
+                RoundedRectangle(cornerRadius: 4)
+                    .strokeBorder(Color.accentColor.opacity(isPrimary ? 1 : 0.75), lineWidth: width)
+                RoundedRectangle(cornerRadius: max(1, 4 - width))
+                    .inset(by: width)
+                    .strokeBorder(Color.white.opacity(isPrimary ? 1 : 0.85), lineWidth: 1)
+            }
+        }
+        .allowsHitTesting(false)
     }
 
     private var topLeftBadge: some View {

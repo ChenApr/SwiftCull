@@ -18,6 +18,7 @@ struct WatermarkPresetEditorView: View {
     @State private var previewError: String?
     @State private var previewPreparation: Task<WatermarkCustomRenderer.PreparedSource, Error>?
     @State private var saveError: String?
+    @ObservedObject private var fontDownloads = WatermarkFontDownloads.shared
 
     init(configuration: WatermarkConfiguration, photo: PhotoEntry?, sourcePath: String?,
          onSave: @escaping (WatermarkConfiguration) throws -> Void) {
@@ -54,7 +55,7 @@ struct WatermarkPresetEditorView: View {
         }
         .background(Color(nsColor: .windowBackgroundColor))
         .frame(width: 1050, height: 720)
-        .task(id: draft) { await loadPreview() }
+        .task(id: "\(draft.hashValue)|\(fontDownloads.revision)") { await loadPreview() }
         .alert("无法保存预设", isPresented: Binding(
             get: { saveError != nil }, set: { if !$0 { saveError = nil } }
         )) { Button("好") { saveError = nil } } message: { Text(saveError ?? "") }
@@ -212,32 +213,7 @@ struct WatermarkPresetEditorView: View {
                     .monospacedDigit().frame(width: 48)
             }
             if component.wrappedValue.kind != .logo {
-                Picker("字体", selection: component.fontID) {
-                    Text("原样（系统字体）").tag(String?.none)
-                    Section("常用字体") {
-                        ForEach(Array(WatermarkFont.bundled.prefix(5))) { option in
-                            Text(option.name).tag(Optional(option.id))
-                        }
-                    }
-                    Section("艺术字体") {
-                        ForEach(Array(WatermarkFont.bundled.dropFirst(5))) { option in
-                            Text(option.name).tag(Optional(option.id))
-                        }
-                    }
-                    Section("本机字体") {
-                        ForEach(WatermarkFont.local) { option in
-                            Text(option.name + (WatermarkFont.isAvailable(option) ? "" : "（未安装）"))
-                                .tag(Optional(option.id))
-                                .disabled(!WatermarkFont.isAvailable(option))
-                        }
-                    }
-                }
-                if let id = component.wrappedValue.fontID,
-                   let option = (WatermarkFont.bundled + WatermarkFont.local).first(where: { $0.id == id }) {
-                    Text("SwiftCull  光影留痕")
-                        .font(.custom(option.family, size: 18))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
+                WatermarkFontPicker(fontID: component.fontID)
                 HStack {
                     ColorPicker("文字颜色", selection: Binding(
                         get: { Color(nsColor: NSColor.watermarkHex(component.wrappedValue.colorHex) ?? .black) },
@@ -284,6 +260,7 @@ struct WatermarkPresetEditorView: View {
 
     private func save() {
         do {
+            try WatermarkFont.requireAvailable(in: [draft])
             try onSave(draft)
             dismiss()
         } catch {

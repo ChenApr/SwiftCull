@@ -126,13 +126,17 @@ actor PhotoExifCache {
 
     private var cache: [String: PhotoExifInfo] = [:]
 
-    func info(for path: String, fallbackDate: Date) -> PhotoExifInfo {
-        let key = "\(path)|\(fallbackDate.timeIntervalSince1970)"
+    func info(for path: String, fallbackDate: Date, revision: String = "") -> PhotoExifInfo? {
+        // Switching photos can queue calls behind an image-header read. Do not
+        // start disk work for selections that have already been superseded.
+        guard !Task.isCancelled else { return nil }
+        let key = "\(path)|\(fallbackDate.timeIntervalSince1970)|\(revision)"
         if let cached = cache[key] {
             return cached
         }
 
         let info = PhotoExifInfo.load(from: path, fallbackDate: fallbackDate)
+        if cache.count >= 512 { cache.removeAll(keepingCapacity: true) }
         cache[key] = info
         return info
     }

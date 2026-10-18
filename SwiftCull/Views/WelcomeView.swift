@@ -117,7 +117,7 @@ struct ShortcutGuideView: View {
         ("0", "清除评分"),
         ("Delete", "删除所选照片"),
         ("A", "全选当前筛选结果"),
-        ("Esc", "退出多选 / 取消输入焦点"),
+        ("Esc", "退出大图 / 退出多选 / 取消输入焦点"),
         ("⌘O", "打开文件夹"),
         ("⌘C", "复制所选版本；裁剪后的照片可在 Finder 中粘贴")
     ]
@@ -184,22 +184,10 @@ struct PhotoSinglePreviewView: View {
     @State private var watermarkSelection: WatermarkPhotoSelection?
 
     @State private var scale: CGFloat = 1
-    @State private var steadyScale: CGFloat = 1
-    @State private var offset: CGSize = .zero
-    @State private var steadyOffset: CGSize = .zero
-    @State private var containerSize: CGSize = .zero
+    @State private var zoomRequest: PhotoZoomRequest?
 
     private let minScale: CGFloat = 1
     private let maxScale: CGFloat = 6
-
-    /// Only request a sharper decode when zoom crosses a useful resolution tier.
-    /// Pinching should not start a new image read for every fractional scale value.
-    private var previewResolutionScale: CGFloat {
-        if scale > 4 { return 6 }
-        if scale > 2 { return 4 }
-        if scale > 1 { return 2 }
-        return 1
-    }
 
     var body: some View {
         ZStack {
@@ -211,24 +199,9 @@ struct PhotoSinglePreviewView: View {
                                   onLivePhoto: { store.openLivePhotoEditor(for: photo) },
                                   onExit: { store.exitVideoPlaybackMode() })
             } else {
-                GeometryReader { geo in
-                    DetailThumbnailView(photo: photo,
-                                        // Keep the previous 1800pt baseline for
-                                        // cropped previews, then request more as
-                                        // the viewport or zoom level requires.
-                                        targetSize: max(1800,
-                                                        max(geo.size.width, geo.size.height) * previewResolutionScale))
-                        .scaleEffect(scale)
-                        .offset(offset)
-                        .frame(width: geo.size.width, height: geo.size.height)
-                        .contentShape(Rectangle())
-                        .gesture(magnifyGesture(in: geo.size))
-                        .simultaneousGesture(panGesture(in: geo.size))
-                        .onTapGesture(count: 2) { toggleZoom() }
-                        .onTapGesture(count: 1) { resignFocus() }
-                        .onAppear { containerSize = geo.size }
-                        .onChange(of: geo.size) { _, newValue in containerSize = newValue }
-                }
+                DetailThumbnailView(photo: photo, zoomRequest: zoomRequest,
+                                    scale: $scale, onSingleClick: resignFocus,
+                                    onImageReady: { store.previewDidLoad(photoID: photo.id) })
                 .padding(.horizontal, 24)
                 .padding(.vertical, 20)
                 .clipped()
@@ -255,7 +228,10 @@ struct PhotoSinglePreviewView: View {
                 Divider()
             }
         }
-        .onChange(of: photo.id) { _, _ in resetZoom() }
+        .onChange(of: photo.id) { _, _ in
+            scale = 1
+            zoomRequest = nil
+        }
     }
 
     private var background: some View {
@@ -307,14 +283,14 @@ struct PhotoSinglePreviewView: View {
                 Divider().frame(height: 16)
             }
             Button {
-                zoomBy(1 / 1.5)
+                zoomRequest = PhotoZoomRequest(increasing: false)
             } label: {
                 Image(systemName: "minus.magnifyingglass")
             }
             .disabled(scale <= minScale)
 
             Button {
-                withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { resetZoom() }
+                requestZoom(1)
             } label: {
                 Text("\(Int((scale * 100).rounded()))%")
                     .font(.caption.monospacedDigit().weight(.medium))
@@ -323,7 +299,7 @@ struct PhotoSinglePreviewView: View {
             .help("重置缩放")
 
             Button {
-                zoomBy(1.5)
+                zoomRequest = PhotoZoomRequest(increasing: true)
             } label: {
                 Image(systemName: "plus.magnifyingglass")
             }
@@ -346,80 +322,8 @@ struct PhotoSinglePreviewView: View {
         .padding(14)
     }
 
-    // MARK: - Zoom & Pan
-
-    private func magnifyGesture(in size: CGSize) -> some Gesture {
-        MagnifyGesture()
-            .onChanged { value in
-                scale = min(max(steadyScale * value.magnification, minScale), maxScale)
-                offset = clampedOffset(offset, in: size)
-            }
-            .onEnded { _ in
-                steadyScale = scale
-                if scale <= minScale {
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { resetZoom() }
-                } else {
-                    steadyOffset = offset
-                }
-            }
-    }
-
-    private func panGesture(in size: CGSize) -> some Gesture {
-        DragGesture()
-            .onChanged { value in
-                guard scale > minScale else { return }
-                let proposed = CGSize(
-                    width: steadyOffset.width + value.translation.width,
-                    height: steadyOffset.height + value.translation.height
-                )
-                offset = clampedOffset(proposed, in: size)
-            }
-            .onEnded { _ in
-                guard scale > minScale else { return }
-                steadyOffset = offset
-            }
-    }
-
-    private func toggleZoom() {
-        withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
-            if scale > minScale {
-                resetZoom()
-            } else {
-                scale = 2.5
-                steadyScale = 2.5
-            }
-        }
-    }
-
-    private func zoomBy(_ factor: CGFloat) {
-        withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
-            scale = min(max(scale * factor, minScale), maxScale)
-            steadyScale = scale
-            if scale <= minScale {
-                offset = .zero
-                steadyOffset = .zero
-            } else {
-                offset = clampedOffset(offset, in: containerSize)
-                steadyOffset = offset
-            }
-        }
-    }
-
-    private func resetZoom() {
-        scale = minScale
-        steadyScale = minScale
-        offset = .zero
-        steadyOffset = .zero
-    }
-
-    /// 将平移量限制在缩放后图片的可视范围内
-    private func clampedOffset(_ proposed: CGSize, in size: CGSize) -> CGSize {
-        let maxX = max(0, (size.width * scale - size.width) / 2)
-        let maxY = max(0, (size.height * scale - size.height) / 2)
-        return CGSize(
-            width: min(max(proposed.width, -maxX), maxX),
-            height: min(max(proposed.height, -maxY), maxY)
-        )
+    private func requestZoom(_ value: CGFloat) {
+        zoomRequest = PhotoZoomRequest(scale: value)
     }
 
     private func resignFocus() {

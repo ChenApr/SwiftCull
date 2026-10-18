@@ -38,6 +38,7 @@ enum WatermarkCustomRenderer {
 
     static func renderCanvas(prepared: PreparedSource,
                              configuration: WatermarkConfiguration) throws -> SemiWatermarkRenderer.RenderedCanvas {
+        try WatermarkFont.requireAvailable(in: [configuration])
         if let border = configuration.border {
             let base = try PhotoBorderRenderer.render(image: prepared.semi.image, configuration: border)
             return try overlay(prepared: prepared, configurations: [configuration], on: base)
@@ -116,6 +117,7 @@ enum WatermarkCustomRenderer {
 
     static func overlay(prepared: PreparedSource, configurations: [WatermarkConfiguration],
                         on base: SemiWatermarkRenderer.RenderedCanvas) throws -> SemiWatermarkRenderer.RenderedCanvas {
+        try WatermarkFont.requireAvailable(in: configurations)
         guard configurations.contains(where: { !$0.components.isEmpty }) else { return base }
         let source = base.bitmap
         let canvas = CGRect(x: 0, y: 0, width: source.pixelsWide, height: source.pixelsHigh)

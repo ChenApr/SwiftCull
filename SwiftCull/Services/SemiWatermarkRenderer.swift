@@ -45,6 +45,7 @@ enum SemiWatermarkRenderer {
     static func renderCanvas(prepared: PreparedSource, preset: WatermarkPreset,
                              matchOrientation: Bool,
                              configuration: WatermarkConfiguration? = nil) throws -> RenderedCanvas {
+        if let configuration { try WatermarkFont.requireAvailable(in: [configuration]) }
         let image = prepared.image
         let metadata = prepared.metadata
         let selected = preset.resolved(isPortrait: image.height > image.width,

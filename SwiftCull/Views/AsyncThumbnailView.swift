@@ -1,7 +1,19 @@
 import SwiftUI
 import AVKit
 
+private struct GridThumbnailLoadingKey: EnvironmentKey {
+    static let defaultValue = true
+}
+
+extension EnvironmentValues {
+    var gridThumbnailLoadingEnabled: Bool {
+        get { self[GridThumbnailLoadingKey.self] }
+        set { self[GridThumbnailLoadingKey.self] = newValue }
+    }
+}
+
 struct AsyncThumbnailView: View {
+    @Environment(\.gridThumbnailLoadingEnabled) private var loadingEnabled
     let photoId: String
     let imagePath: String
     let size: CGFloat
@@ -20,6 +32,7 @@ struct AsyncThumbnailView: View {
 
     @State private var image: NSImage?
     @State private var loadTask: Task<Void, Never>?
+    @State private var deliveryID = UUID()
 
     private var renderSize: CGFloat {
         CGFloat(ThumbnailService.quantizedSize(size))
@@ -72,16 +85,30 @@ struct AsyncThumbnailView: View {
         .onDisappear {
             loadTask?.cancel()
             loadTask = nil
+            GridImageDelivery.shared.cancel(id: deliveryID)
+            deliveryID = UUID()
         }
         .onChange(of: cacheId) { _, _ in
             // 保留旧缩略图，待新尺寸就绪后再替换，缩放时不闪烁
             loadTask?.cancel()
             loadThumbnail()
         }
+        .onChange(of: loadingEnabled) { _, enabled in
+            if enabled { loadThumbnail() }
+            else {
+                loadTask?.cancel()
+                loadTask = nil
+                GridImageDelivery.shared.cancel(id: deliveryID)
+                deliveryID = UUID()
+            }
+        }
     }
 
     private func loadThumbnail() {
         loadTask?.cancel()
+        GridImageDelivery.shared.cancel(id: deliveryID)
+        deliveryID = UUID()
+        guard loadingEnabled else { return }
         let service = ThumbnailService.shared
 
         if let cached = service.getCached(cacheId) {
@@ -95,12 +122,18 @@ struct AsyncThumbnailView: View {
         let requestPath = imagePath
         let requestSize = renderSize
         let requestCrop = crop
+        let requestDeliveryID = deliveryID
         loadTask = Task { @MainActor in
             let newImage = await service.thumbnail(path: requestPath, id: requestCacheId,
                                                    size: requestSize, crop: requestCrop)
             guard !Task.isCancelled else { return }
             guard cacheId == requestCacheId, let newImage else { return }
-            self.image = newImage
+            GridImageDelivery.shared.submit(id: requestDeliveryID) {
+                guard deliveryID == requestDeliveryID else { return }
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) { self.image = newImage }
+            }
         }
     }
 }
@@ -149,103 +182,83 @@ struct InspectorThumbnailView: View {
 
 struct DetailThumbnailView: View {
     let photo: PhotoEntry
-    var targetSize: CGFloat = 1000
+    let zoomRequest: PhotoZoomRequest?
+    @Binding var scale: CGFloat
+    var onSingleClick: () -> Void
+    var onImageReady: () -> Void = {}
+    @Environment(\.displayScale) private var displayScale
     @State private var image: NSImage?
+    @State private var loadedKey: String?
+    @State private var loadedPixels = 0
+    @State private var navigationTiming = PreviewNavigationTiming()
 
-    private var cacheId: String {
-        "detail|\(photo.primaryFilePath)|\(Int(targetSize.rounded()))|\(String(describing: photo.cropRect))"
-    }
+    private var sourceKey: String { "\(photo.id)|\(PhotoPreviewService.sourceKey(for: photo))" }
 
     var body: some View {
-        Group {
-            if let image = image {
-                Image(nsImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-            } else if photo.isVideoOnly {
-                ZStack {
-                    Color(nsColor: .windowBackgroundColor)
-                    Image(systemName: "video.fill")
-                        .font(.system(size: 48))
-                        .foregroundStyle(.secondary)
-                    ProgressView()
-                        .scaleEffect(0.8)
+        GeometryReader { geometry in
+            let pixels = PhotoPreviewService.pixelTier(viewport: geometry.size, displayScale: displayScale, zoom: scale)
+            let displayedImage = loadedKey == sourceKey ? image
+                : (PhotoPreviewService.shared.cached(for: photo, pixels: pixels)
+                    ?? ThumbnailService.shared.getCached(ThumbnailService.inspectorCacheKey(for: photo)))
+            PhotoZoomViewport(image: displayedImage, sourceID: sourceKey, request: zoomRequest,
+                              onScaleChange: { scale = $0 }, onSingleClick: onSingleClick)
+                .overlay {
+                    if displayedImage == nil {
+                        ProgressView().controlSize(.small).allowsHitTesting(false)
+                    }
                 }
-            } else {
-                ZStack {
-                    Color(nsColor: .windowBackgroundColor)
-                    ProgressView()
-                        .scaleEffect(0.8)
+                .task(id: "\(sourceKey)|\(pixels)") {
+                    let requestKey = sourceKey
+                    let changingPhoto = loadedKey != requestKey
+                    let started = ProcessInfo.processInfo.systemUptime
+                    let rapidNavigation = changingPhoto && navigationTiming.isRapid(at: started)
+                    // A smaller viewport/zoom must not downgrade a sharper image.
+                    if !changingPhoto, loadedPixels >= pixels { return }
+                    if let cached = PhotoPreviewService.shared.cached(for: photo, pixels: pixels) {
+                        commit(cached, key: requestKey, pixels: pixels)
+                        onImageReady()
+                        return
+                    }
+                    if changingPhoto {
+                        let preview = await ThumbnailService.shared.inspectorThumbnail(for: photo)
+                        guard !Task.isCancelled else { return }
+                        commit(preview, key: requestKey, pixels: 960)
+                    }
+                    guard !photo.isVideoOnly else { onImageReady(); return }
+                    // Resize and live zoom settle before increasing decode resolution.
+                    // AppKit keeps transforming the existing image throughout the gesture.
+                    if rapidNavigation || !changingPhoto {
+                        let remaining = 0.12 - (ProcessInfo.processInfo.systemUptime - started)
+                        if remaining > 0 {
+                            do { try await Task.sleep(for: .seconds(remaining)) } catch { return }
+                        }
+                    }
+                    let loaded = await PhotoPreviewService.shared.image(for: photo, pixels: pixels)
+                    guard !Task.isCancelled, requestKey == sourceKey, let loaded else { return }
+                    commit(loaded, key: requestKey, pixels: pixels)
+                    onImageReady()
                 }
-            }
-        }
-        .frame(maxWidth: .infinity)
-        .id(cacheId)
-        .task(id: cacheId) {
-            await loadDetailImage()
         }
     }
 
-    private func loadDetailImage() async {
-        let path = photo.primaryImagePath.isEmpty ? (photo.movPath ?? "") : photo.primaryImagePath
-        guard !path.isEmpty else { return }
-
-        let loaded = await loadDetailImageBackground(
-            path: path,
-            isVideo: photo.isVideoOnly,
-            crop: photo.cropRect,
-            targetPixels: Int(targetSize * 2)
-        )
-
-        guard !Task.isCancelled else { return }
-        self.image = loaded
+    private func commit(_ loaded: NSImage?, key: String, pixels: Int) {
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            image = loaded
+            loadedKey = key
+            loadedPixels = pixels
+        }
     }
+}
 
-    /// 大图预览使用独立的高分辨率解码路径，不能复用网格缩略图服务的尺寸上限。
-    /// 这样网格加载仍然受控，大图则可以按窗口尺寸和缩放级别读取足够的像素。
-    private nonisolated func loadDetailImageBackground(path: String, isVideo: Bool,
-                                                       crop: CropRect?, targetPixels: Int) async -> NSImage? {
-        if isVideo {
-            let service = ThumbnailService.shared
-            return await withCheckedContinuation { continuation in
-                service.generateThumbnail(path: path, id: "detail-video|\(path)", size: 800) { image in
-                    continuation.resume(returning: image)
-                }
-            }
-        }
+/// Per-view timing has no published state, so navigation bookkeeping adds no render.
+private final class PreviewNavigationTiming {
+    private var previous = -Double.infinity
 
-        if let crop {
-            // ImageIO applies maxPixelSize before the crop. Scale the source
-            // request by the smallest crop dimension so the visible crop can
-            // still reach the requested display resolution. The source size
-            // remains the hard upper bound inside CropImageService.
-            let fraction = max(0.001, min(crop.normalized.width, crop.normalized.height))
-            let sourceMaxPixelSize = Int((Double(targetPixels) / fraction).rounded(.up))
-            guard let cgImage = try? CropImageService.image(path: path, crop: crop,
-                                                            maxPixelSize: sourceMaxPixelSize) else { return nil }
-            return NSImage(cgImage: cgImage,
-                           size: NSSize(width: cgImage.width, height: cgImage.height))
-        }
-
-        let url = URL(fileURLWithPath: path)
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
-
-        let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
-        let originalWidth = properties?[kCGImagePropertyPixelWidth] as? CGFloat ?? 6000
-        let originalHeight = properties?[kCGImagePropertyPixelHeight] as? CGFloat ?? 4000
-        let maxPixelSize = max(originalWidth, originalHeight)
-        let options: [CFString: Any] = [
-            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceShouldCache: false,
-            kCGImageSourceShouldCacheImmediately: true
-        ]
-        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
-            return nil
-        }
-        return NSImage(cgImage: cgImage,
-                       size: NSSize(width: cgImage.width, height: cgImage.height))
+    func isRapid(at time: Double) -> Bool {
+        defer { previous = time }
+        return time - previous < 0.15
     }
 }
 

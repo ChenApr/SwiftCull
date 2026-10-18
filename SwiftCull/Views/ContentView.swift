@@ -215,11 +215,31 @@ struct ContentView: View {
             WelcomeView()
         } else if store.photos.isEmpty {
             WelcomeView()
-        } else if store.viewMode == .single, let photo = store.selectedPhoto {
-            PhotoSinglePreviewView(photo: photo)
         } else {
-            PhotoGridView()
+            PhotoBrowserView()
         }
+    }
+}
+
+/// Keep the grid mounted so returning from a preview preserves its native scroll
+/// position and visible thumbnails instead of rebuilding at the top first.
+struct PhotoBrowserView: View {
+    @EnvironmentObject var store: PhotoStore
+
+    private var showsPreview: Bool {
+        store.viewMode == .single && store.selectedPhoto != nil
+    }
+
+    var body: some View {
+        PhotoGridView()
+            .allowsHitTesting(!showsPreview)
+            .accessibilityHidden(showsPreview)
+            .overlay {
+                if showsPreview, let photo = store.selectedPhoto {
+                    PhotoSinglePreviewView(photo: photo)
+                        .background(Color(nsColor: .windowBackgroundColor))
+                }
+            }
     }
 }
 

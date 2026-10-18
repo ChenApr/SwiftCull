@@ -213,7 +213,7 @@ struct PhotoDetailView: View {
                     fileTypePill(photo)
                 }
                 detailRow("大小", photo.formattedSize)
-                detailRow("拍摄时间", photo.formattedCaptureDate)
+                detailRow(store.captureDatesReady ? "拍摄时间" : "文件日期", photo.formattedCaptureDate)
                 detailRow("最后修改", photo.formattedModificationDate)
             }
         }
@@ -257,9 +257,10 @@ struct PhotoDetailView: View {
         let photoID = photo.id
         let path = photo.primaryImagePath
         let fallbackDate = photo.fileDate
+        let revision = "\(photo.modificationDate.timeIntervalSince1970)|\(photo.totalFileSize)"
 
         exifTask = Task {
-            let info = await PhotoExifCache.shared.info(for: path, fallbackDate: fallbackDate)
+            let info = await PhotoExifCache.shared.info(for: path, fallbackDate: fallbackDate, revision: revision)
             guard !Task.isCancelled else { return }
 
             await MainActor.run {
@@ -302,6 +303,8 @@ struct PhotoDetailView: View {
                         .buttonStyle(.plain)
                         .help("清除所有标签")
                     }
+                } else if !store.areTagsLoaded(for: photo) {
+                    emptyHint("正在读取标签…")
                 } else {
                     emptyHint("尚未添加标签")
                 }

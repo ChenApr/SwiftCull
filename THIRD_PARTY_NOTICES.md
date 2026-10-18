@@ -27,9 +27,11 @@ SwiftCull 使用以下第三方素材、字体及改编代码。各组件适用�
 
 现有代码来源记录未包含固定的上游提交号。
 
-## 随应用分发的字体
+## 内置与可选下载字体
 
-以下 18 款字体以 SIL Open Font License 1.1 分发。字体文件位于 `SwiftCull/Fonts/`；各自的原始版权声明、保留字体名称及许可全文见对应文件。
+以下 18 款字体均遵循 SIL Open Font License 1.1。应用仅内置 **Roboto、Caveat、Dancing Script** 三款字体，默认使用系统字体；其余 15 款按用户选择从下表所列上游项目下载，保存到本机 `~/Library/Application Support/SwiftCull/Fonts/`，下载后可离线使用。
+
+源码仓库的 `SwiftCull/Fonts/` 保留原字体及全部许可文件，构建配置会排除可选字体二进制。每款字体的原始版权声明、保留字体名称及许可全文仍随应用分发，见下表。下载地址、固定提交、文件大小与 SHA-256 校验值维护在 `SwiftCull/Models/WatermarkFontDownload.swift`；下载的字体不进行裁字或修改。
 
 | 字体 | 字体文件 | 版权与许可 |
 | --- | --- | --- |
@@ -58,8 +60,8 @@ SwiftCull 使用以下第三方素材、字体及改编代码。各组件适用�
 | --- | --- |
 | [Google Fonts](https://github.com/google/fonts)（除下列三款外的 15 款字体） | 提交 `954e256c4277419b5e48bffa51be069b2bd01bde` |
 | [LXGW WenKai](https://github.com/lxgw/LxgwWenKai) | 提交 `a06dd23142e82758f23f792f4060bbf1613286e8` |
-| [LXGW Marker Gothic](https://github.com/lxgw/LxgwMarkerGothic) | 发布版本 `v1.004` |
-| [KN Maiyuan](https://github.com/maoken-fonts/KNMaiyuan) | 发布版本 `v1.20` |
+| [LXGW Marker Gothic](https://github.com/lxgw/LxgwMarkerGothic) | 发布版本 `v1.004`；下载固定 Git 提交 `a40bdefc4c00139ba8c1188ccbee0a29196f3133` 的 TTF |
+| [KN Maiyuan](https://github.com/maoken-fonts/KNMaiyuan) | 发布版本 `v1.20`，固定提交 `580b2bb873828122f7816f1c5c4caf2667cba62f` |
 
 ## 系统字体
 

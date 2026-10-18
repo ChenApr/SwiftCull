@@ -10,7 +10,8 @@ struct WatermarkServiceSmoke {
         precondition(WatermarkPreset.standard.resolved(isPortrait: true, matchOrientation: true) == .standardPortrait)
         precondition(WatermarkPreset.standardPortrait.resolved(isPortrait: false, matchOrientation: true) == .standard)
         precondition(WatermarkPreset.nikonPortrait.resolved(isPortrait: false, matchOrientation: true) == .nikonPortrait)
-        precondition(WatermarkFont.bundled.count == 18)
+        precondition(WatermarkFont.bundled.count == 3)
+        precondition(WatermarkFont.downloadable.count == 15)
         precondition(WatermarkFont.local.count == 5)
         precondition(WatermarkFont.bundled.allSatisfy(WatermarkFont.isAvailable),
                      "A bundled watermark font could not be loaded")

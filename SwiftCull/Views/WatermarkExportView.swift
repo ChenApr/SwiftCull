@@ -14,6 +14,8 @@ struct WatermarkExportView: View {
     @Environment(\.dismiss) private var dismiss
     @StateObject private var presetStore: WatermarkPresetStore
 
+    @ObservedObject private var fontDownloads = WatermarkFontDownloads.shared
+
     @State private var items: [WatermarkReviewItem] = []
     @State private var currentIndex = 0
     @State private var preview: NSImage?
@@ -69,7 +71,7 @@ struct WatermarkExportView: View {
 
     private var primaryKey: String {
         guard let currentItem else { return "empty" }
-        return "\(currentItem.id)|\(currentItem.choice)|\(currentItem.matchOrientation)|\(currentConfiguration?.hashValue ?? 0)|\(currentItem.border.hashValue)"
+        return "\(currentItem.id)|\(currentItem.choice)|\(currentItem.matchOrientation)|\(currentConfiguration?.hashValue ?? 0)|\(currentItem.border.hashValue)|\(fontDownloads.revision)"
     }
 
     private var previewKey: String {
@@ -78,7 +80,7 @@ struct WatermarkExportView: View {
             let configurationHash = configuration(for: layer.choice)?.hashValue ?? 0
             return "\(layer.id)|\(layer.choice)|\(layer.matchOrientation)|\(configurationHash)"
         }.joined(separator: ";")
-        return "\(primaryKey)|\(overlayKey)"
+        return "\(primaryKey)|\(overlayKey)|\(fontDownloads.revision)"
     }
 
     private var choiceBinding: Binding<WatermarkExportChoice> {
@@ -139,6 +141,16 @@ struct WatermarkExportView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 Divider()
                 controls.frame(width: 316)
+            }
+            if !missingFonts.isEmpty {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("所用字体尚未就绪，请下载字体或在预设中改用系统字体。").font(.caption)
+                        ForEach(missingFonts) { WatermarkFontDownloadStatus(option: $0) }
+                    }
+                    .padding(.horizontal, 20).padding(.vertical, 8)
+                }
+                .frame(maxHeight: 130)
             }
             Divider()
             exportBar
@@ -632,11 +644,29 @@ struct WatermarkExportView: View {
         if panel.runModal() == .OK { outputDirectory = panel.url }
     }
 
+    private var missingFonts: [WatermarkFont] {
+        let configurations = items.filter { $0.include || $0.id == currentItem?.id }.flatMap { item -> [WatermarkConfiguration] in
+            guard let request = try? WatermarkReviewPlan.request(for: item, configurations: presetStore.configurations) else { return [] }
+            return ([request.style] + request.overlays.map(\.style)).compactMap {
+                if case .custom(let configuration) = $0 { return configuration }
+                return nil
+            }
+        }
+        return WatermarkFont.missing(in: Array(Set(configurations)))
+    }
+
     private func exportCheckedPhotos() {
         guard let outputDirectory else { return }
         do {
             let requests = try WatermarkReviewPlan.requests(from: items,
                                                             configurations: presetStore.configurations)
+            let configurations = requests.flatMap { request in
+                ([request.style] + request.overlays.map(\.style)).compactMap { style -> WatermarkConfiguration? in
+                    if case .custom(let configuration) = style { return configuration }
+                    return nil
+                }
+            }
+            try WatermarkFont.requireAvailable(in: Array(Set(configurations)))
             store.exportWatermarkedPhotos(requests, to: outputDirectory)
             dismiss()
         } catch {

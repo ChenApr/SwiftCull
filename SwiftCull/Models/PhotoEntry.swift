@@ -9,7 +9,7 @@ struct PhotoEntry: Identifiable, Hashable, Sendable {
     let jpgFileSize: Int64?
     let nefFileSize: Int64?
     let movFileSize: Int64?
-    let fileDate: Date
+    var fileDate: Date
     let modificationDate: Date
     var rating: Int
     var tags: [String]

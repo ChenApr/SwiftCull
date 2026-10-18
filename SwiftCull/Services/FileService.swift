@@ -37,13 +37,6 @@ final class FileService: @unchecked Sendable {
         return nil
     }
 
-    private static let exifDateFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.timeZone = .current
-        return f
-    }()
-
     private static let displayDateFormatter: DateFormatter = {
         let f = DateFormatter()
         f.dateStyle = .medium
@@ -197,7 +190,9 @@ final class FileService: @unchecked Sendable {
             return nil
         }
 
-        let formatter = exifDateFormatter
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = .current
 
         for format in ["yyyy:MM:dd HH:mm:ss", "yyyy-MM-dd HH:mm:ss", "yyyy-MM-dd'T'HH:mm:ssXXXXX"] {
             formatter.dateFormat = format
